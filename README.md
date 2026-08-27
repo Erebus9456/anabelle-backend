@@ -36,29 +36,55 @@ WebSocket endpoint: `ws://localhost:8000/ws/anabelle`
 python run.py test
 ```
 
-Report written to `test/anabelle_static_test_report.txt`.
+Report written to `<data-dir>/test/anabelle_static_test_report.txt` (see [Persistent data](#persistent-data-on-colab) below).
 
 ---
 
-## Google Colab (one cell)
+## Google Colab
 
 1. In Colab, select **Runtime → Change runtime type → GPU**
-2. Open [`Anabelle_Colab.ipynb`](Anabelle_Colab.ipynb) or paste:
+2. Clone once, then **pull code updates** without re-downloading models:
 
 ```python
+# First time
 !git clone <repo-url> anabelle-backend
 %cd anabelle-backend
 !python setup.py --colab
-!python run.py test
+
+# Later sessions — pull latest code only (models/tests stay cached)
+%cd /content/anabelle-backend
+!git pull
+!python setup.py --colab --skip-models --skip-test-data
 ```
 
-3. Start the server (keep the cell running):
+3. Run tests and start the server:
 
 ```python
-!python run.py serve
+!python run.py test
+!python run.py serve   # keep this cell running
 ```
 
-Use Colab's port forwarding or `ngrok` to expose `8000` to your frontend.
+Or open [`Anabelle_Colab.ipynb`](Anabelle_Colab.ipynb).
+
+Use Colab's port forwarding or `ngrok` to expose port `8000` to your frontend.
+
+### Persistent data on Colab
+
+Models and test audio are stored **outside the git repo** so `git pull` never triggers re-downloads:
+
+| Asset | Default Colab path |
+|-------|-------------------|
+| SenseVoice weights | `/content/anabelle-data/models/SenseVoiceSmall/` |
+| RAVDESS test audio | `/content/anabelle-data/test/audio/` |
+| Test report | `/content/anabelle-data/test/anabelle_static_test_report.txt` |
+
+Override with an environment variable:
+
+```python
+import os
+os.environ["ANABELLE_DATA_DIR"] = "/content/my-cache"
+!python setup.py --colab
+```
 
 ---
 
@@ -71,7 +97,10 @@ anabelle-backend/
 ├── main.py                 # FastAPI WebSocket gateway
 ├── engine.py               # SenseVoice + acoustic fallback logic
 ├── device_utils.py         # CUDA / MPS / CPU detection
+├── paths.py                # Persistent data paths (Colab vs local)
 ├── colab_compat.py         # Colab + NumPy 2.x compatibility shims
+├── constraints-py313.txt   # Wheel pins for Python 3.13 (tokenizers)
+├── constraints-colab.txt   # Wheel pins for Colab Python 3.10–3.12
 ├── download_models.py      # Hugging Face model downloader
 ├── download_test_data.py   # RAVDESS dataset downloader
 ├── requirements.txt        # Local / Mac pinned deps
@@ -79,7 +108,7 @@ anabelle-backend/
 ├── Anabelle_Colab.ipynb    # Ready-made Colab notebook
 └── test/
     ├── test_ravdess.py     # Static accuracy benchmark
-    └── audio/              # RAVDESS clips (gitignored, downloaded by setup)
+    └── audio/              # RAVDESS clips (local dev; Colab uses /content/anabelle-data)
 ```
 
 ---
@@ -118,7 +147,8 @@ Three stacks must be present and **version-aligned**:
 | `funasr` | `1.4.4` | Core SenseVoice framework |
 | `modelscope` | latest | Secure model downloading |
 | `torch` | `2.2.2` (Mac) / `2.5+` (Colab CUDA) | Math engine |
-| `transformers` | `< 4.45` | Audio ↔ text coordination |
+| `transformers` | `< 4.45` (Py ≤ 3.12) / `4.46+` (Py 3.13) | Audio ↔ text coordination |
+| `tokenizers` | `≥ 0.21` (Py 3.13 wheels) | Required by transformers; must not build from source |
 | `WeTextProcessing` | `≥ 1.0.3` | Text normalization / ITN (required for model registration) |
 
 ### Stack 2 — Acoustic DNA Layer
@@ -167,6 +197,12 @@ On Python 3.13, NumPy 1.x cannot be installed, creating a compatibility circle. 
 FunASR discovers models via registration keys (e.g. `SenseVoiceSmall`). If a sub-dependency like text normalization is missing, registration fails silently. FunASR then treats your local `models/SenseVoiceSmall` path as a remote ModelScope ID and returns **404 Not Found**.
 
 **Fix:** `setup.py` installs `WeTextProcessing`, and `colab_compat.py` force-imports `funasr.models.sense_voice.model` before `AutoModel` is constructed.
+
+### D. The `tokenizers` Build Failure (Python 3.13 / Colab)
+
+`transformers` depends on `tokenizers`. Older `tokenizers` releases have no Python 3.13 wheels and pip tries to compile from Rust source, which fails in Colab.
+
+**Fix:** `setup.py` pre-installs `tokenizers>=0.21` with `--only-binary=tokenizers`, then installs `funasr` with `--no-deps` so pip cannot trigger a source build.
 
 ---
 
@@ -223,6 +259,8 @@ python setup.py --skip-test-data # Skip RAVDESS download
 | 404 on model load | Registration failure | Re-run `setup.py`; check `WeTextProcessing` installed |
 | Slow inference | Running on CPU | Enable GPU runtime (Colab) or verify CUDA drivers |
 | `numba` import error | Python too new | Use Python 3.11, or upgrade numba |
+| Failed building wheel for `tokenizers` | Python 3.13, old pip resolve order | Pull latest code and re-run `python setup.py --colab` |
+| Re-downloads models on every pull | Assets inside repo dir | Use default `/content/anabelle-data` (automatic on Colab) |
 | Empty model folder | Download interrupted | Re-run `python download_models.py` (resumes partial files) |
 
 ---

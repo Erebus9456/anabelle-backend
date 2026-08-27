@@ -1,0 +1,17 @@
+# Runtime dependencies for funasr==1.4.4 (installed with --no-deps on Python 3.13).
+soundfile>=0.12.1
+PyYAML>=5.1.2
+requests
+regex
+omegaconf>=2.0
+hydra-core>=1.3.2
+huggingface_hub
+safetensors
+tiktoken
+kaldiio>=2.17.0
+jieba
+jamo
+jaconv
+rapidfuzz>=3.0.0
+torch_complex
+oss2

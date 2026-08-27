@@ -5,17 +5,17 @@ apply_runtime_patches()
 from funasr import AutoModel
 import logging
 import re
-import os
 import torch
 import numpy as np
 import librosa
 
 from device_utils import get_device_info
+from paths import get_model_dir
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AnabelleEngine")
 
-model_path = os.path.join(os.getcwd(), "models", "SenseVoiceSmall")
+model_path = str(get_model_dir())
 
 
 class AnabelleEngine:

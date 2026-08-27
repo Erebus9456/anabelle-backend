@@ -9,11 +9,12 @@ from colab_compat import apply_runtime_patches
 
 apply_runtime_patches()
 from engine import AnabelleEngine
+from paths import get_data_dir, get_test_audio_dir
 
 def run_static_test():
     engine = AnabelleEngine()
-    base_path = os.path.join(os.path.dirname(__file__), "audio")
-    report_path = os.path.join(os.path.dirname(__file__), "anabelle_static_test_report.txt")
+    base_path = get_test_audio_dir()
+    report_path = get_data_dir() / "test" / "anabelle_static_test_report.txt"
 
     # RAVDESS Mapping
     ravdess_map = {
@@ -26,10 +27,17 @@ def run_static_test():
     source_stats = {"AI_MODEL": 0, "ACOUSTIC_DNA": 0, "ERROR_RECOVERY": 0}
 
     print("\n--- Starting Static Accuracy Test ---")
+    print(f"Audio directory: {base_path}")
+
+    if not base_path.is_dir():
+        raise FileNotFoundError(
+            f"Test audio not found at {base_path}. Run: python setup.py --skip-deps"
+        )
 
     for actor_dir in sorted(os.listdir(base_path)):
-        actor_path = os.path.join(base_path, actor_dir)
-        if not os.path.isdir(actor_path): continue
+        actor_path = base_path / actor_dir
+        if not actor_path.is_dir():
+            continue
 
         files = [f for f in os.listdir(actor_path) if f.lower().endswith(".wav")]
         for filename in tqdm(files, desc=f"Evaluating {actor_dir}"):
@@ -37,10 +45,10 @@ def run_static_test():
             if len(parts) < 3: continue
 
             expected_emotion = ravdess_map.get(parts[2], "NEUTRAL")
-            file_full_path = os.path.join(actor_path, filename)
+            file_full_path = actor_path / filename
             
             # Load Audio (16kHz)
-            audio, _ = librosa.load(file_full_path, sr=16000)
+            audio, _ = librosa.load(str(file_full_path), sr=16000)
             
             # Run Inference
             prediction = engine.analyze_chunk(audio)

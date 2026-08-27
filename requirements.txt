@@ -1,7 +1,4 @@
-# Stack 1: AI Inference Engine
-funasr==1.4.4
-modelscope>=1.15.0
-transformers<4.45
+# Stack 1: AI Inference Engine (funasr/transformers/tokenizers installed by setup.py)
 sentencepiece==0.2.2
 WeTextProcessing>=1.0.3
 
@@ -18,4 +15,4 @@ uvicorn==0.52.4
 websockets==17.1
 tqdm==4.70.0
 
-# torch / torchaudio are installed by setup.py based on platform
+# torch / torchaudio / funasr / transformers installed by setup.py

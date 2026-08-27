@@ -5,16 +5,9 @@ from __future__ import annotations
 import logging
 import sys
 
+from paths import is_colab
+
 logger = logging.getLogger("AnabelleCompat")
-
-
-def is_colab() -> bool:
-    try:
-        import google.colab  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
 
 
 def apply_runtime_patches() -> None:

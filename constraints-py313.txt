@@ -1,0 +1,3 @@
+# Pin wheels that have cp313 binaries before funasr/modelscope resolve deps.
+tokenizers>=0.21.0
+transformers>=4.46.0,<4.50

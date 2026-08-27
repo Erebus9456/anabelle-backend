@@ -9,6 +9,8 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from paths import ensure_data_dirs, get_ravdess_cache_dir, get_test_audio_dir
+
 DATASET_URL = "https://zenodo.org/records/1188976/files/Audio_Speech_Actors_01-24.zip?download=1"
 ACTORS = tuple(f"Actor_{index:02d}" for index in range(1, 25))
 EXPECTED_WAV_COUNT = 60
@@ -35,10 +37,10 @@ def dataset_is_complete(data_dir: Path) -> bool:
     return True
 
 
-def download_test_data(project_root: Path | None = None) -> Path:
-    root = project_root or Path(__file__).resolve().parent
-    data_dir = root / "test" / "audio"
-    download_dir = root / "test" / ".ravdess-download"
+def download_test_data() -> Path:
+    ensure_data_dirs()
+    data_dir = get_test_audio_dir()
+    download_dir = get_ravdess_cache_dir()
     archive_path = download_dir / "Audio_Speech_Actors_01-24.zip"
     extract_dir = download_dir / "extracted"
 
@@ -49,7 +51,7 @@ def download_test_data(project_root: Path | None = None) -> Path:
         print(f"RAVDESS audio is already complete in {data_dir}")
         return data_dir
 
-    print("Downloading RAVDESS speech audio...")
+    print(f"Downloading RAVDESS speech audio to {data_dir} ...")
     download_file(DATASET_URL, archive_path)
 
     if extract_dir.exists():
