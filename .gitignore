@@ -1,0 +1,10 @@
+# Local Python environment and generated files
+venv/
+__pycache__/
+*.py[cod]
+
+# Downloaded model weights and test data
+models/SenseVoiceSmall/
+test/audio/
+test/anabelle_static_test_report.txt
+test/.ravdess-download/
