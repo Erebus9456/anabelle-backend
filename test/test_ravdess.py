@@ -2,11 +2,15 @@ import argparse
 import os
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime
 
 import librosa
 from tqdm import tqdm
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from test_utils import bootstrap_project_root, build_ravdess_report_path
+
+bootstrap_project_root()
+
 from colab_compat import apply_runtime_patches
 
 apply_runtime_patches()
@@ -65,7 +69,15 @@ def run_static_test(
 ):
     engine = AnabelleEngine(enable_ser=not no_ser and not ai_only)
     base_path = get_test_audio_dir()
-    report_path = get_data_dir() / "test" / "anabelle_static_test_report.txt"
+    reports_dir = get_data_dir() / "test" / "reports"
+    report_path = build_ravdess_report_path(
+        reports_dir,
+        language=language,
+        ai_only=ai_only,
+        no_ser=no_ser,
+        diagnose=diagnose,
+        sample_limit=sample_limit,
+    )
 
     results = []
     source_stats = Counter()
@@ -79,6 +91,7 @@ def run_static_test(
     print(f"AI-only mode:    {ai_only}")
     print(f"SER requested:   {not no_ser and not ai_only}")
     print(f"SER loaded:      {engine.ser_available}")
+    print(f"Report file:     {report_path}")
 
     if not base_path.is_dir():
         raise FileNotFoundError(
@@ -163,6 +176,8 @@ def run_static_test(
     report.append("=" * 60)
     report.append("ANABELLE AFFECTIVE ENGINE - STATIC TEST REPORT")
     report.append("=" * 60)
+    report.append(f"Generated at:       {datetime.now().isoformat(timespec='seconds')}")
+    report.append(f"Report file:        {report_path}")
     report.append(f"Total Files Tested: {total}")
     report.append(f"Passed:             {correct}")
     report.append(f"Failed:             {total - correct}")

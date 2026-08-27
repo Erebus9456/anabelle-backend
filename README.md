@@ -39,7 +39,7 @@ python run.py test --ai-only          # SenseVoice tags only (~28% on RAVDESS)
 python run.py test --sample-limit 96  # quick smoke test
 ```
 
-Report written to `<data-dir>/test/anabelle_static_test_report.txt`.
+Report written to `<data-dir>/test/reports/ravdess_<params>_<timestamp>.txt` — each run gets a unique file based on test flags (language, hybrid/ai-only, SER on/off, sample limit, diagnose).
 
 **Why RAVDESS scores look low:** SenseVoice tags **62%+ of RAVDESS clips as `EMO_UNKNOWN`** because it was trained on real-world speech, not acted studio datasets. The pipeline now routes those cases to **emotion2vec+** (`iic/emotion2vec_plus_large`), a dedicated SER model. Expect significantly higher accuracy after pulling this update.
 

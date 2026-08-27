@@ -6,5 +6,6 @@ __pycache__/
 # Downloaded model weights and test data
 models/SenseVoiceSmall/
 test/audio/
+test/reports/
 test/anabelle_static_test_report.txt
 test/.ravdess-download/
