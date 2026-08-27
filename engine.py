@@ -17,6 +17,24 @@ logger = logging.getLogger("AnabelleEngine")
 
 model_path = str(get_model_dir())
 
+# Official SenseVoice emotion tags (always present in model output when working correctly)
+SENSEVOICE_EMOTION_TAGS = frozenset(
+    {
+        "HAPPY",
+        "SAD",
+        "ANGRY",
+        "NEUTRAL",
+        "FEARFUL",
+        "DISGUSTED",
+        "SURPRISED",
+        "EMO_UNKNOWN",
+    }
+)
+
+SENSEVOICE_EVENT_TAGS = frozenset(
+    {"SPEECH", "BGM", "APPLAUSE", "LAUGHTER", "CRY", "SING", "COUGH", "SNEEZE", "BREATH"}
+)
+
 
 class AnabelleEngine:
     def __init__(self):
@@ -45,7 +63,7 @@ class AnabelleEngine:
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
 
-        # 1. EMOTION MAPPING (AI Tag -> Avatar State)
+        # SenseVoice tag -> avatar state
         self.emotion_map = {
             "HAPPY": "HAPPY",
             "SAD": "SAD",
@@ -54,91 +72,163 @@ class AnabelleEngine:
             "FEARFUL": "SAD",
             "DISGUSTED": "ANGRY",
             "SURPRISED": "EXCITED",
-            "EMO_UNKNOWN": None
+            "EMO_UNKNOWN": "NEUTRAL",
         }
 
-        # 2. EVENT MAPPING (AI Event -> Avatar State)
-        # This ensures the avatar reacts to sounds like laughter or crying
         self.event_map = {
             "LAUGHTER": "HAPPY",
             "CRY": "SAD",
             "SING": "EXCITED",
-            "SPEECH": None, # Handled by emotion
+            "SPEECH": None,
             "APPLAUSE": "EXCITED",
             "BGM": None,
             "BREATH": None,
             "COUGH": None,
-            "SNEEZE": None
+            "SNEEZE": None,
         }
 
         logger.info("ANABELLE Engine loaded successfully.")
 
-    def get_acoustic_fallback(self, audio_data):
-        """Refined Acoustic Heuristics for the LUKYX Engine."""
-        rms = np.sqrt(np.mean(audio_data**2))
-        zcr = np.mean(librosa.feature.zero_crossing_rate(audio_data))
-        
-        if rms < 0.01: return "NEUTRAL"
-        
-        if rms > 0.07:
-            return "ANGRY" if zcr > 0.08 else "EXCITED"
-        if zcr < 0.04:
-            return "SAD"
-        return "HAPPY"
+    @staticmethod
+    def preprocess_audio(audio_data: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
+        """Peak-normalize float32 PCM for consistent SenseVoice inference."""
+        audio = np.asarray(audio_data, dtype=np.float32).flatten()
+        peak = np.max(np.abs(audio))
+        if peak > 0:
+            audio = (audio / peak) * 0.95
+        return audio
 
-    def extract_state_from_tags(self, text):
+    def parse_tags(self, text: str) -> list[str]:
+        return [tag.upper() for tag in re.findall(r"<\|([^|]+)\|>", text)]
+
+    def extract_state_from_tags(self, text: str) -> str | None:
         """
-        Processes your emoji_dict logic: 
-        1. Checks for primary emotions first.
-        2. Falls back to events (Laughter/Cry).
+        Parse SenseVoice rich tags using the official emotion/event vocabulary.
+        Returns avatar emotion or None if no usable tag was found.
         """
-        tags = re.findall(r"<\|(\w+)\|>", text.upper())
-        
-        # Check for direct emotions first
+        tags = self.parse_tags(text)
+
         for tag in tags:
-            if tag in self.emotion_map and self.emotion_map[tag]:
+            if tag in SENSEVOICE_EMOTION_TAGS:
                 return self.emotion_map[tag]
-        
-        # Check for events if no emotion was found
+
         for tag in tags:
-            if tag in self.event_map and self.event_map[tag]:
-                return self.event_map[tag]
-                
+            mapped = self.event_map.get(tag)
+            if mapped:
+                return mapped
+
         return None
 
+    def get_acoustic_fallback(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:
+        """
+        Prosody-based fallback for live chunks when SenseVoice omits an emotion tag.
+        Uses energy, zero-crossing rate, spectral centroid, and pitch cues.
+        """
+        audio = self.preprocess_audio(audio_data, sample_rate)
+        if audio.size == 0:
+            return "NEUTRAL"
+
+        rms = float(np.sqrt(np.mean(audio**2)))
+        if rms < 0.008:
+            return "NEUTRAL"
+
+        zcr = float(np.mean(librosa.feature.zero_crossing_rate(y=audio)))
+        centroid = float(
+            np.mean(librosa.feature.spectral_centroid(y=audio, sr=sample_rate))
+        )
+        rolloff = float(
+            np.mean(librosa.feature.spectral_rolloff(y=audio, sr=sample_rate, roll_percent=0.85))
+        )
+
+        pitches, magnitudes = librosa.piptrack(y=audio, sr=sample_rate, fmin=75, fmax=400)
+        pitch_mask = magnitudes > np.percentile(magnitudes, 75)
+        voiced = pitches[pitch_mask]
+        voiced = voiced[voiced > 0]
+        pitch_mean = float(np.mean(voiced)) if voiced.size else 160.0
+
+        # High energy + harsh spectrum -> angry
+        if rms > 0.07 and (zcr > 0.075 or centroid > 2200):
+            return "ANGRY"
+
+        # High pitch + high energy -> excited; moderate -> happy
+        if pitch_mean > 195 and rms > 0.045:
+            return "EXCITED"
+        if pitch_mean > 170 and rms > 0.035:
+            return "HAPPY"
+
+        # Low energy, low pitch, dull spectrum -> sad
+        if rms < 0.04 and (pitch_mean < 155 or centroid < 1400 or zcr < 0.045):
+            return "SAD"
+        if rolloff < 1800 and rms < 0.05:
+            return "SAD"
+
+        if rms < 0.03:
+            return "NEUTRAL"
+
+        return "HAPPY"
+
     @torch.inference_mode()
-    def analyze_chunk(self, audio_data):
+    def analyze_chunk(
+        self,
+        audio_data,
+        *,
+        language: str = "auto",
+        allow_acoustic_fallback: bool = True,
+        sample_rate: int = 16000,
+    ):
+        audio = self.preprocess_audio(audio_data, sample_rate)
+
         try:
             res = self.model.generate(
-                input=audio_data,
+                input=audio,
                 cache={},
-                language="auto",
-                use_itn=True
+                language=language,
+                use_itn=True,
             )
-            
-            if res and len(res) > 0:
-                raw_text = res[0]['text']
-                
-                # Use the comprehensive tag parser
-                inferred_emotion = self.extract_state_from_tags(raw_text)
-                
-                if inferred_emotion:
-                    return {
-                        "emotion": inferred_emotion,
-                        "source": "AI_MODEL",
-                        "raw_text": raw_text
-                    }
-                else:
-                    # AI text exists but no specific emotion/event tag was triggered
-                    return {
-                        "emotion": self.get_acoustic_fallback(audio_data),
-                        "source": "ACOUSTIC_DNA",
-                        "raw_text": raw_text
-                    }
-                
+
+            if not res:
+                raise ValueError("Empty model response")
+
+            raw_text = res[0].get("text", "")
+            inferred_emotion = self.extract_state_from_tags(raw_text)
+
+            if inferred_emotion:
+                return {
+                    "emotion": inferred_emotion,
+                    "source": "AI_MODEL",
+                    "raw_text": raw_text,
+                    "tags": self.parse_tags(raw_text),
+                }
+
+            if allow_acoustic_fallback:
+                return {
+                    "emotion": self.get_acoustic_fallback(audio, sample_rate),
+                    "source": "ACOUSTIC_DNA",
+                    "raw_text": raw_text,
+                    "tags": self.parse_tags(raw_text),
+                }
+
+            return {
+                "emotion": "NEUTRAL",
+                "source": "AI_MODEL",
+                "raw_text": raw_text,
+                "tags": self.parse_tags(raw_text),
+            }
+
         except Exception as e:
             logger.error(f"Engine Error: {e}")
-            return {"emotion": "NEUTRAL", "source": "ERROR_RECOVERY"}
+            fallback = (
+                self.get_acoustic_fallback(audio, sample_rate)
+                if allow_acoustic_fallback
+                else "NEUTRAL"
+            )
+            return {
+                "emotion": fallback,
+                "source": "ERROR_RECOVERY",
+                "raw_text": "",
+                "tags": [],
+            }
+
 
 if __name__ == "__main__":
     engine = AnabelleEngine()
