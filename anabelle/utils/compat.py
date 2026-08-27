@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from paths import is_colab
+from anabelle.utils.paths import is_colab
 
 logger = logging.getLogger("AnabelleCompat")
 
@@ -43,10 +43,7 @@ def _patch_numpy2_warnings() -> None:
 
 
 def _ensure_funasr_registration() -> None:
-    """
-    Force-import funasr submodules so SenseVoiceSmall registers before AutoModel
-    tries to resolve a local model path as a remote ModelScope ID (404 errors).
-    """
+    """Force-import funasr submodules so SenseVoiceSmall registers before AutoModel loads."""
     try:
         import funasr  # noqa: F401
     except ImportError:

@@ -1,21 +1,27 @@
+"""RAVDESS static accuracy benchmark."""
+
+from __future__ import annotations
+
 import argparse
 import os
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import librosa
 from tqdm import tqdm
 
-from test_utils import bootstrap_project_root, build_ravdess_report_path
-
-bootstrap_project_root()
-
-from colab_compat import apply_runtime_patches
+from anabelle.engine.core import SENSEVOICE_EMOTION_TAGS, AnabelleEngine
+from anabelle.utils.compat import apply_runtime_patches
+from anabelle.utils.paths import get_test_audio_dir, get_test_reports_dir
+from tests.helpers import build_ravdess_report_path
 
 apply_runtime_patches()
-from engine import AnabelleEngine, SENSEVOICE_EMOTION_TAGS
-from paths import get_data_dir, get_test_audio_dir
 
 RAVDESS_MAP = {
     "01": "NEUTRAL",
@@ -23,9 +29,9 @@ RAVDESS_MAP = {
     "03": "HAPPY",
     "04": "SAD",
     "05": "ANGRY",
-    "06": "SAD",      # fearful -> avatar sad
-    "07": "ANGRY",    # disgust -> avatar angry
-    "08": "EXCITED",  # surprised -> avatar excited
+    "06": "SAD",
+    "07": "ANGRY",
+    "08": "EXCITED",
 }
 
 RAVDESS_CODE_TO_LABEL = {
@@ -69,9 +75,8 @@ def run_static_test(
 ):
     engine = AnabelleEngine(enable_ser=not no_ser and not ai_only)
     base_path = get_test_audio_dir()
-    reports_dir = get_data_dir() / "test" / "reports"
     report_path = build_ravdess_report_path(
-        reports_dir,
+        get_test_reports_dir(),
         language=language,
         ai_only=ai_only,
         no_ser=no_ser,
@@ -98,9 +103,8 @@ def run_static_test(
             f"Test audio not found at {base_path}. Run: python setup.py --skip-deps"
         )
 
-    actor_dirs = sorted(p for p in base_path.iterdir() if p.is_dir())
     files_to_eval = []
-    for actor_path in actor_dirs:
+    for actor_path in sorted(p for p in base_path.iterdir() if p.is_dir()):
         for filename in sorted(os.listdir(actor_path)):
             if filename.lower().endswith(".wav"):
                 files_to_eval.append((actor_path.name, filename))
@@ -125,7 +129,6 @@ def run_static_test(
             allow_ser_fallback=not no_ser and not ai_only,
         )
 
-        predicted_emotion = prediction["emotion"]
         source = prediction.get("source", "UNKNOWN")
         source_stats[source] += 1
 
@@ -156,8 +159,8 @@ def run_static_test(
                 "ravdess_code": ravdess_code,
                 "ravdess_label": RAVDESS_CODE_TO_LABEL.get(ravdess_code, "?"),
                 "expected": expected_emotion,
-                "predicted": predicted_emotion,
-                "correct": expected_emotion == predicted_emotion,
+                "predicted": prediction["emotion"],
+                "correct": expected_emotion == prediction["emotion"],
                 "source": source,
                 "sensevoice_emotion": sensevoice_emotion or "NONE",
                 "ser_label": ser_label or "-",
@@ -172,42 +175,44 @@ def run_static_test(
     ser_results = [r for r in results if r["source"] == "SER_MODEL"]
     acoustic_results = [r for r in results if r["source"] == "ACOUSTIC_DNA"]
 
-    report = []
-    report.append("=" * 60)
-    report.append("ANABELLE AFFECTIVE ENGINE - STATIC TEST REPORT")
-    report.append("=" * 60)
-    report.append(f"Generated at:       {datetime.now().isoformat(timespec='seconds')}")
-    report.append(f"Report file:        {report_path}")
-    report.append(f"Total Files Tested: {total}")
-    report.append(f"Passed:             {correct}")
-    report.append(f"Failed:             {total - correct}")
-    report.append(f"Overall Accuracy:   {accuracy:.2f}%")
-    report.append(f"Language hint:      {language}")
-    report.append(f"AI-only mode:       {ai_only}")
-    report.append(f"SER requested:      {not no_ser and not ai_only}")
-    report.append(f"SER loaded:         {engine.ser_available}")
-    report.append("-" * 60)
-    report.append("ENGINE LOGIC DISTRIBUTION")
+    report = [
+        "=" * 60,
+        "ANABELLE AFFECTIVE ENGINE - STATIC TEST REPORT",
+        "=" * 60,
+        f"Generated at:       {datetime.now().isoformat(timespec='seconds')}",
+        f"Report file:        {report_path}",
+        f"Total Files Tested: {total}",
+        f"Passed:             {correct}",
+        f"Failed:             {total - correct}",
+        f"Overall Accuracy:   {accuracy:.2f}%",
+        f"Language hint:      {language}",
+        f"AI-only mode:       {ai_only}",
+        f"SER requested:      {not no_ser and not ai_only}",
+        f"SER loaded:         {engine.ser_available}",
+        "-" * 60,
+        "ENGINE LOGIC DISTRIBUTION",
+    ]
     for src in ("AI_MODEL", "SER_MODEL", "ACOUSTIC_DNA", "ERROR_RECOVERY"):
         count = source_stats.get(src, 0)
         pct = (count / total) * 100 if total else 0.0
         report.append(f"{src:18}: {count} files ({pct:.1f}%)")
-    report.append("-" * 60)
-    report.append("SENSEVOICE RAW EMOTION TAG DISTRIBUTION")
+
+    report.extend(["-" * 60, "SENSEVOICE RAW EMOTION TAG DISTRIBUTION"])
     if raw_emotion_tags:
         for tag, count in raw_emotion_tags.most_common():
             pct = (count / total) * 100 if total else 0.0
             report.append(f"{tag:14}: {count:4} ({pct:.1f}%)")
     else:
         report.append("No SenseVoice emotion tags detected.")
-    report.append("-" * 60)
-    report.append("EMOTION2VEC LABEL DISTRIBUTION (SER_MODEL cases)")
+
+    report.extend(["-" * 60, "EMOTION2VEC LABEL DISTRIBUTION (SER_MODEL cases)"])
     if ser_label_stats:
         for label, count in ser_label_stats.most_common():
             report.append(f"{label:14}: {count:4}")
     else:
         report.append("No SER_MODEL predictions.")
-    report.append("-" * 60)
+
+    report.extend(["-" * 60])
     report.extend(summarize_accuracy(results, "HYBRID ACCURACY (current pipeline)"))
     if ai_results:
         report.append("")
@@ -218,8 +223,8 @@ def run_static_test(
     if acoustic_results:
         report.append("")
         report.extend(summarize_accuracy(acoustic_results, "ACOUSTIC_DNA ONLY"))
-    report.append("-" * 60)
-    report.append("ACCURACY BY RAVDESS EMOTION CODE")
+
+    report.extend(["-" * 60, "ACCURACY BY RAVDESS EMOTION CODE"])
     for code in sorted(RAVDESS_CODE_TO_LABEL):
         label = RAVDESS_CODE_TO_LABEL[code]
         mapped = RAVDESS_MAP[code]
@@ -232,16 +237,14 @@ def run_static_test(
         )
 
     if missing_tag_samples:
-        report.append("-" * 60)
-        report.append("SAMPLE FILES WITH NO PARSED EMOTION TAG")
+        report.extend(["-" * 60, "SAMPLE FILES WITH NO PARSED EMOTION TAG"])
         for sample in missing_tag_samples:
             report.append(f"{sample['file']} | expected={sample['expected']}")
             report.append(f"  tags={sample['tags']}")
             report.append(f"  raw={sample['raw_text'][:160]}")
 
     if diagnose:
-        report.append("-" * 60)
-        report.append("DIAGNOSTIC SAMPLE (first 24 files)")
+        report.extend(["-" * 60, "DIAGNOSTIC SAMPLE (first 24 files)"])
         for row in results[:24]:
             report.append(
                 f"{row['file']} | ravdess={row['ravdess_label']} | "
@@ -250,8 +253,7 @@ def run_static_test(
             )
             report.append(f"  raw={row['raw_text'][:160]}")
 
-    report.append("-" * 60)
-    report.append("DETAILED FILE LOG")
+    report.extend(["-" * 60, "DETAILED FILE LOG"])
     for row in results:
         status = "PASS" if row["correct"] else "FAIL"
         report.append(
@@ -263,31 +265,17 @@ def run_static_test(
     final_output = "\n".join(report)
     print("\n" + "\n".join(report[:20]))
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(report_path, "w", encoding="utf-8") as handle:
-        handle.write(final_output)
-
+    report_path.write_text(final_output, encoding="utf-8")
     print(f"\nFull report saved to: {report_path}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="RAVDESS static accuracy benchmark")
-    parser.add_argument("--diagnose", action="store_true", help="Include extra diagnostic samples")
-    parser.add_argument("--sample-limit", type=int, default=0, help="Limit number of files tested")
-    parser.add_argument(
-        "--language",
-        default="en",
-        help="Language hint passed to SenseVoice (default: en for RAVDESS)",
-    )
-    parser.add_argument(
-        "--ai-only",
-        action="store_true",
-        help="SenseVoice tags only (disable SER and acoustic fallback)",
-    )
-    parser.add_argument(
-        "--no-ser",
-        action="store_true",
-        help="Disable emotion2vec SER fallback",
-    )
+    parser.add_argument("--diagnose", action="store_true")
+    parser.add_argument("--sample-limit", type=int, default=0)
+    parser.add_argument("--language", default="en")
+    parser.add_argument("--ai-only", action="store_true")
+    parser.add_argument("--no-ser", action="store_true")
     args = parser.parse_args()
     run_static_test(
         diagnose=args.diagnose,

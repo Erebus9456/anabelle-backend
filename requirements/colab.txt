@@ -1,4 +1,4 @@
-# Colab base deps — torch, numpy, funasr, transformers, and tokenizers are installed by setup.py
+# Colab base deps — torch, numpy, funasr, transformers installed by setup.py
 sentencepiece==0.2.2
 librosa==0.11.0
 numba>=0.59.0

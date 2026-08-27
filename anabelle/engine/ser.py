@@ -1,4 +1,7 @@
-"""Dedicated speech-emotion recognition via emotion2vec+ (FunASR)."""
+"""Dedicated speech-emotion recognition via emotion2vec+ (FunASR).
+
+Part of the ANABELLE hybrid inference stack — handles SenseVoice EMO_UNKNOWN cases.
+"""
 
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from paths import ensure_data_dirs, get_model_dir
+from anabelle.utils.paths import ensure_data_dirs, get_model_dir
 
 BASE_URL = "https://huggingface.co/FunAudioLLM/SenseVoiceSmall/resolve/main"
 MODEL_FILES = (

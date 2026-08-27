@@ -8,6 +8,9 @@ from pathlib import Path
 DEFAULT_COLAB_DATA_DIR = Path("/content/anabelle-data")
 ENV_DATA_DIR = "ANABELLE_DATA_DIR"
 
+# Repository root (parent of the `anabelle` package).
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 def is_colab() -> bool:
     try:
@@ -23,9 +26,9 @@ def get_data_dir() -> Path:
     Return the root directory for downloaded assets.
 
     Priority:
-    1. ANABELLE_DATA_DIR env var (explicit override)
-    2. /content/anabelle-data on Colab (survives git pull/clone)
-    3. Project root for local development
+    1. ANABELLE_DATA_DIR env var
+    2. /content/anabelle-data on Colab
+    3. Repository root for local development
     """
     if explicit := os.environ.get(ENV_DATA_DIR):
         return Path(explicit).expanduser().resolve()
@@ -33,7 +36,7 @@ def get_data_dir() -> Path:
     if is_colab():
         return DEFAULT_COLAB_DATA_DIR
 
-    return Path(__file__).resolve().parent
+    return PROJECT_ROOT
 
 
 def get_model_dir() -> Path:
@@ -48,9 +51,14 @@ def get_ravdess_cache_dir() -> Path:
     return get_data_dir() / "test" / ".ravdess-download"
 
 
+def get_test_reports_dir() -> Path:
+    return get_data_dir() / "test" / "reports"
+
+
 def ensure_data_dirs() -> Path:
     data_dir = get_data_dir()
     get_model_dir().mkdir(parents=True, exist_ok=True)
     get_test_audio_dir().mkdir(parents=True, exist_ok=True)
     get_ravdess_cache_dir().mkdir(parents=True, exist_ok=True)
+    get_test_reports_dir().mkdir(parents=True, exist_ok=True)
     return data_dir

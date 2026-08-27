@@ -1,99 +1,39 @@
 # ANABELLE Backend
 
-Enterprise affective inference engine for the ANABELLE avatar. This service receives live audio over WebSocket, runs **SenseVoiceSmall** emotion detection, and falls back to acoustic heuristics when the model does not emit a usable tag.
+Hybrid affective inference service for the ANABELLE avatar. Receives live audio over WebSocket, runs a **3-tier emotion pipeline** (SenseVoice → emotion2vec → acoustic fallback), and returns avatar-ready emotion states.
+
+> **Stack:** FastAPI + Uvicorn (not Flask). GPU-accelerated via PyTorch (CUDA / Apple MPS).
+
+---
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Project Structure](#project-structure)
+- [Architecture](#architecture)
+- [API Reference](#api-reference)
+- [Testing](#testing)
+- [Environment Variables](#environment-variables)
+- [Colab Workflow](#colab-workflow)
+- [Dependencies](#dependencies)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Quick Start
 
-### One-click setup (recommended)
-
 ```bash
 git clone <repo-url> anabelle-backend && cd anabelle-backend
-python setup.py
+python setup.py                 # install deps + download models + RAVDESS data
+python run.py serve             # start gateway on :8000
+python run.py test              # run RAVDESS benchmark (~80% hybrid accuracy)
 ```
 
-This single command:
-
-1. Installs PyTorch for your platform (CUDA on Linux/Colab, MPS-friendly build on Mac)
-2. Pins NumPy to a compatible version
-3. Installs all project dependencies
-4. Downloads the ~1 GB SenseVoiceSmall model weights
-5. Downloads the RAVDESS speech test dataset (24 actors × 60 clips)
-6. Verifies FunASR model registration
-
-### Run the gateway
+Alternative entry points:
 
 ```bash
-python run.py serve
-```
-
-WebSocket endpoint: `ws://localhost:8000/ws/anabelle`
-
-### Run static accuracy tests
-
-```bash
-python run.py test
-python run.py test --diagnose
-python run.py test --ai-only          # SenseVoice tags only (~28% on RAVDESS)
-python run.py test --sample-limit 96  # quick smoke test
-```
-
-Report written to `<data-dir>/test/reports/ravdess_<params>_<timestamp>.txt` — each run gets a unique file based on test flags (language, hybrid/ai-only, SER on/off, sample limit, diagnose).
-
-**Why RAVDESS scores look low:** SenseVoice tags **62%+ of RAVDESS clips as `EMO_UNKNOWN`** because it was trained on real-world speech, not acted studio datasets. The pipeline now routes those cases to **emotion2vec+** (`iic/emotion2vec_plus_large`), a dedicated SER model. Expect significantly higher accuracy after pulling this update.
-
-**Interpreting the report:**
-- **AI_MODEL** — SenseVoice was confident
-- **SER_MODEL** — emotion2vec+ handled an `EMO_UNKNOWN` case
-- **ACOUSTIC_DNA** — last-resort prosody guess
-
----
-
-## Google Colab
-
-1. In Colab, select **Runtime → Change runtime type → GPU**
-2. Clone once, then **pull code updates** without re-downloading models:
-
-```python
-# First time
-!git clone <repo-url> anabelle-backend
-%cd anabelle-backend
-!python setup.py --colab
-
-# Later sessions — pull latest code only (models/tests stay cached)
-%cd /content/anabelle-backend
-!git pull
-!python setup.py --colab --skip-models --skip-test-data
-```
-
-3. Run tests and start the server:
-
-```python
-!python run.py test
-!python run.py serve   # keep this cell running
-```
-
-Or open [`Anabelle_Colab.ipynb`](Anabelle_Colab.ipynb).
-
-Use Colab's port forwarding or `ngrok` to expose port `8000` to your frontend.
-
-### Persistent data on Colab
-
-Models and test audio are stored **outside the git repo** so `git pull` never triggers re-downloads:
-
-| Asset | Default Colab path |
-|-------|-------------------|
-| SenseVoice weights | `/content/anabelle-data/models/SenseVoiceSmall/` |
-| RAVDESS test audio | `/content/anabelle-data/test/audio/` |
-| Test report | `/content/anabelle-data/test/anabelle_static_test_report.txt` |
-
-Override with an environment variable:
-
-```python
-import os
-os.environ["ANABELLE_DATA_DIR"] = "/content/my-cache"
-!python setup.py --colab
+python -m anabelle serve
+uvicorn anabelle.app:app --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -102,183 +42,321 @@ os.environ["ANABELLE_DATA_DIR"] = "/content/my-cache"
 
 ```
 anabelle-backend/
-├── setup.py              # One-click installer (local + Colab)
-├── run.py                  # serve | test entry point
-├── main.py                 # FastAPI WebSocket gateway
-├── engine.py               # SenseVoice + acoustic fallback logic
-├── device_utils.py         # CUDA / MPS / CPU detection
-├── paths.py                # Persistent data paths (Colab vs local)
-├── colab_compat.py         # Colab + NumPy 2.x compatibility shims
-├── constraints-py313.txt   # Wheel pins for Python 3.13 (tokenizers)
-├── constraints-colab.txt   # Wheel pins for Colab Python 3.10–3.12
-├── download_models.py      # Hugging Face model downloader
-├── download_test_data.py   # RAVDESS dataset downloader
-├── requirements.txt        # Local / Mac pinned deps
-├── requirements-colab.txt  # Colab-specific deps (torch via setup)
-├── Anabelle_Colab.ipynb    # Ready-made Colab notebook
-└── test/
-    ├── test_ravdess.py     # Static accuracy benchmark
-    └── audio/              # RAVDESS clips (local dev; Colab uses /content/anabelle-data)
+├── README.md
+├── pyproject.toml              # package metadata
+├── setup.py                    # → scripts/setup.py
+├── run.py                      # → anabelle.cli
+├── main.py                     # → anabelle.app (uvicorn compat)
+│
+├── anabelle/                   # Application package
+│   ├── app.py                  # FastAPI gateway + WebSocket
+│   ├── cli.py                  # serve | test commands
+│   ├── engine/
+│   │   ├── core.py             # AnabelleEngine (3-tier pipeline)
+│   │   └── ser.py              # emotion2vec+ SER model
+│   └── utils/
+│       ├── paths.py            # data dir resolution (Colab vs local)
+│       ├── device.py           # CUDA / MPS / CPU detection
+│       └── compat.py           # Colab + FunASR registration shims
+│
+├── scripts/
+│   ├── setup.py                # one-click installer
+│   ├── download_models.py      # SenseVoice weights (~1 GB)
+│   ├── download_test_data.py   # RAVDESS dataset
+│   └── shell/                  # bash wrappers
+│
+├── requirements/
+│   ├── base.txt                # local deps
+│   ├── colab.txt               # Colab deps
+│   ├── funasr-runtime.txt      # funasr --no-deps companions
+│   ├── constraints-py313.txt
+│   └── constraints-colab.txt
+│
+├── tests/
+│   ├── benchmark/
+│   │   └── test_ravdess.py     # static accuracy benchmark
+│   └── integration/
+│       └── test_ser.py         # emotion2vec smoke test
+│
+└── notebooks/
+    └── Anabelle_Colab.ipynb
 ```
+
+### Data directories (outside git)
+
+| Environment | Root | Models | Test audio | Reports |
+|-------------|------|--------|------------|---------|
+| **Colab** | `/content/anabelle-data` | `.../models/SenseVoiceSmall/` | `.../test/audio/` | `.../test/reports/` |
+| **Local** | repo root | `models/SenseVoiceSmall/` | `test/audio/` | `test/reports/` |
+
+Override with `ANABELLE_DATA_DIR=/path/to/cache`.
 
 ---
 
 ## Architecture
 
+### System overview
+
 ```
-Browser (React) ──WebSocket──► main.py (FastAPI)
-                                   │
-                                   ▼
-                              engine.py
-                    ┌──────────────┼──────────────┐
-                    │              │              │
-              SenseVoiceSmall   emotion2vec+   Acoustic DNA
-              (transcript +     (SER fallback   (prosody heuristics,
-               confident tags)  for EMO_UNKNOWN) last resort)
-                    │              │              │
-                    └──────────────┴──────────────┘
-                                   ▼
-                          { emotion, source, raw_text }
+┌─────────────┐     WebSocket      ┌──────────────────────────────────────────┐
+│  React App  │ ────────────────► │  anabelle/app.py  (FastAPI + Uvicorn)      │
+│  (browser)  │ ◄──────────────── │  GET /health  ·  WS /ws/anabelle           │
+└─────────────┘   JSON per chunk  └──────────────────┬───────────────────────┘
+                                                     │
+                                                     ▼
+                                    ┌────────────────────────────────────────┐
+                                    │  anabelle/engine/core.py               │
+                                    │  AnabelleEngine.analyze_chunk()        │
+                                    └──────────────────┬─────────────────────┘
+                                                       │
+              ┌────────────────────────────────────────┼────────────────────────┐
+              │                    │                   │                        │
+              ▼                    ▼                   ▼                        ▼
+     ┌────────────────┐  ┌────────────────┐  ┌──────────────┐      ┌──────────────┐
+     │  SenseVoice    │  │  emotion2vec+  │  │  Acoustic    │      │   ERROR      │
+     │  Small         │  │  (SER)         │  │  DNA         │      │   RECOVERY   │
+     │  AI_MODEL      │  │  SER_MODEL     │  │  ACUSTIC_DNA │      │              │
+     └────────────────┘  └────────────────┘  └──────────────┘      └──────────────┘
 ```
 
-**Decision tiers:**
-1. **AI_MODEL** — SenseVoice returns a confident tag (HAPPY, SAD, ANGRY, etc.) or NEUTRAL
-2. **SER_MODEL** — SenseVoice returns `EMO_UNKNOWN`; **emotion2vec+** classifies the utterance
-3. **ACOUSTIC_DNA** — SER confidence too low; prosody heuristics used
+### Decision tiers
 
-**Inference device priority:** CUDA → Apple MPS → CPU
+| Tier | Source | When | RAVDESS accuracy |
+|------|--------|------|------------------|
+| 1 | `AI_MODEL` | SenseVoice emits confident tag (HAPPY, ANGRY, NEUTRAL, …) | ~60% |
+| 2 | `SER_MODEL` | SenseVoice returns `EMO_UNKNOWN` (~63% of clips) | ~93% |
+| 3 | `ACOUSTIC_DNA` | SER confidence too low | fallback |
+| 4 | `ERROR_RECOVERY` | Inference exception | safe default |
 
-The engine uses `@torch.inference_mode()`, enables cuDNN benchmark mode on CUDA, and passes `ngpu=1` to FunASR when a GPU is present.
+**Production hybrid accuracy on RAVDESS: ~81%** (1440 clips, GPU, SER enabled).
 
----
+### Inference device priority
 
-## Requirements (Definitive Stack)
-
-Three stacks must be present and **version-aligned**:
-
-### Stack 1 — AI Inference Engine
-
-| Package | Version | Role |
-|---------|---------|------|
-| `funasr` | `1.4.4` | Core SenseVoice framework |
-| `modelscope` | latest | Secure model downloading |
-| `torch` | `2.2.2` (Mac) / `2.5+` (Colab CUDA) | Math engine |
-| `transformers` | `< 4.45` (Py ≤ 3.12) / `4.46+` (Py 3.13) | Audio ↔ text coordination |
-| `tokenizers` | `≥ 0.21` (Py 3.13 wheels) | Required by transformers; must not build from source |
-| `WeTextProcessing` | `≥ 1.0.3` | Text normalization / ITN (required for model registration) |
-
-### Stack 2 — Acoustic DNA Layer
-
-| Package | Version | Role |
-|---------|---------|------|
-| `numpy` | **`1.26.4`** (Python ≤ 3.12) | Must stay on NumPy 1.x |
-| `librosa` | `0.11.0` | WAV loading, ZCR analysis |
-| `numba` | `≥ 0.59` (Py 3.12+) | Accelerates audio math |
-| `scipy` | `≥ 1.11` | Signal processing |
-
-### Stack 3 — Communication Gateway
-
-| Package | Version | Role |
-|---------|---------|------|
-| `fastapi` | `0.141.1` | Web server |
-| `uvicorn` | `0.52.4` | ASGI runner |
-| `websockets` | `17.1` | Live binary audio stream |
-
-> **Do not** `pip install` these manually unless you know your Python version. Always use `python setup.py` so torch/numpy are resolved correctly.
+CUDA → Apple MPS → CPU. Set via PyTorch auto-detection in `anabelle/utils/device.py`.
 
 ---
 
-## Known Version Conflicts
+## API Reference
 
-### A. The NumPy 2.0 Conflict
+Base URL: `http://<host>:8000` (default port **8000**).
 
-In June 2024, NumPy 2.0 shipped breaking ABI changes. Most AI wheels (PyTorch, FunASR, Librosa) were compiled against NumPy 1.x. Installing NumPy 2.x causes instant import/runtime crashes.
+### `GET /health`
 
-**Rule:** `numpy==1.26.4` on Python 3.10–3.12. `setup.py` enforces this automatically.
+Readiness probe for load balancers and monitoring.
 
-### B. The Python 3.12 / 3.13 "Numba" Trap
+**Response** `200 OK`:
 
-`librosa` depends on `numba`, which lags new Python releases.
+```json
+{
+  "status": "ok",
+  "device": "cuda",
+  "device_label": "Tesla T4",
+  "ser_available": true,
+  "model_dir": "/content/anabelle-data/models/SenseVoiceSmall"
+}
+```
 
-| Python | numba requirement | numpy |
-|--------|-------------------|-------|
-| 3.10–3.11 | `≥ 0.58` | `1.26.4` |
-| 3.12 | `≥ 0.59` | `1.26.4` |
-| 3.13+ (Colab) | latest available | `2.x` (1.x unavailable) |
-
-On Python 3.13, NumPy 1.x cannot be installed, creating a compatibility circle. `colab_compat.py` applies best-effort shims and logs warnings. **For production, use Python 3.10 or 3.11.**
-
-### C. The "Model Registration" Failure
-
-FunASR discovers models via registration keys (e.g. `SenseVoiceSmall`). If a sub-dependency like text normalization is missing, registration fails silently. FunASR then treats your local `models/SenseVoiceSmall` path as a remote ModelScope ID and returns **404 Not Found**.
-
-**Fix:** `setup.py` installs `WeTextProcessing`, and `colab_compat.py` force-imports `funasr.models.sense_voice.model` before `AutoModel` is constructed.
-
-### D. The `tokenizers` Build Failure (Python 3.13 / Colab)
-
-`transformers` depends on `tokenizers`. Older `tokenizers` releases have no Python 3.13 wheels and pip tries to compile from Rust source, which fails in Colab.
-
-**Fix:** `setup.py` pre-installs `tokenizers>=0.21` with `--only-binary=tokenizers`, then installs `funasr` with `--no-deps` so pip cannot trigger a source build.
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | `"ok"` when engine is loaded |
+| `device` | string | `"cuda"`, `"mps"`, or `"cpu"` |
+| `device_label` | string | Human-readable device name |
+| `ser_available` | boolean | emotion2vec+ loaded successfully |
+| `model_dir` | string | Path to SenseVoice weights |
 
 ---
 
-## GPU Support
+### `WebSocket /ws/anabelle`
 
-| Platform | Device string | Notes |
-|----------|--------------|-------|
-| NVIDIA (Colab, Linux) | `cuda` | FP16 when compute capability ≥ 7.0 |
-| Apple Silicon | `mps` | Metal acceleration |
-| Fallback | `cpu` | Functional but slower |
+Live emotion inference stream for the avatar.
 
-Verify GPU at runtime:
+#### Connection
+
+```
+ws://<host>:8000/ws/anabelle
+```
+
+No authentication in current version. Accepts one binary audio message per inference cycle.
+
+#### Client → Server
+
+| Property | Value |
+|----------|-------|
+| Format | Binary |
+| Encoding | IEEE 754 **float32** little-endian PCM |
+| Sample rate | **16 000 Hz** |
+| Channels | **Mono** |
+| Chunk size | **0.5 – 2.0 seconds** recommended |
+
+Example (JavaScript):
+
+```javascript
+const ws = new WebSocket("ws://localhost:8000/ws/anabelle");
+ws.binaryType = "arraybuffer";
+
+// float32Array: 16 kHz mono PCM in [-1.0, 1.0]
+ws.send(float32Array.buffer);
+```
+
+#### Server → Client
+
+JSON text frame per audio chunk:
+
+```json
+{
+  "emotion": "HAPPY",
+  "source": "SER_MODEL",
+  "raw_text": "<|en|><|EMO_UNKNOWN|><|Speech|><|withitn|>kids are talking by the door",
+  "tags": ["EN", "EMO_UNKNOWN", "SPEECH", "WITHITN"],
+  "sensevoice_emotion": "EMO_UNKNOWN",
+  "ser_label": "happy",
+  "ser_confidence": 0.87
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `emotion` | string | Avatar state — see [Emotion values](#emotion-values) |
+| `source` | string | `AI_MODEL`, `SER_MODEL`, `ACOUSTIC_DNA`, or `ERROR_RECOVERY` |
+| `raw_text` | string | Full SenseVoice output including tags |
+| `tags` | string[] | Parsed `<\|TAG\|>` tokens (uppercase) |
+| `sensevoice_emotion` | string \| null | Raw SenseVoice emotion tag |
+| `ser_label` | string \| null | emotion2vec label when `source=SER_MODEL` |
+| `ser_confidence` | number \| null | emotion2vec softmax score (0–1) |
+
+#### Emotion values
+
+| Value | Description |
+|-------|-------------|
+| `HAPPY` | Joy, amusement |
+| `SAD` | Sadness, fear (mapped from `FEARFUL`) |
+| `ANGRY` | Anger, disgust (mapped from `DISGUSTED`) |
+| `NEUTRAL` | Calm, neutral |
+| `EXCITED` | Surprise, excitement (mapped from `SURPRISED`) |
+
+#### Disconnect behaviour
+
+- Normal client disconnect → connection closed cleanly
+- Server error → logged, connection closed
+- Engine not ready → close code `1011`
+
+---
+
+## Testing
+
+### RAVDESS static benchmark
+
+Evaluates the full pipeline against 1440 acted speech clips (24 actors × 60 utterances).
 
 ```bash
-python -c "from device_utils import get_device_info; print(get_device_info())"
+# Production pipeline (recommended)
+python run.py test
+
+# SenseVoice tags only (~28% — diagnostic)
+python run.py test --ai-only
+
+# Disable SER fallback
+python run.py test --no-ser
+
+# Quick smoke (96 files)
+python run.py test --sample-limit 96
+
+# Extra diagnostics in report
+python run.py test --diagnose
 ```
 
-In Colab, ensure **Runtime → Change runtime type → GPU** is selected before running `setup.py`.
+Reports are saved to `<data-dir>/test/reports/` with unique filenames:
 
----
+```
+ravdess_lang-en_hybrid_ser_full_nodiag_20260827_124222.txt
+         │         │      │    │    │
+         │         │      │    │    └── diagnose on/off
+         │         │      │    └── full dataset or n96
+         │         │      └── ser / no-ser
+         │         └── hybrid / ai-only
+         └── language hint
+```
 
-## WebSocket Protocol
-
-**Endpoint:** `GET /ws/anabelle` (WebSocket upgrade)
-
-| Direction | Format | Description |
-|-----------|--------|-------------|
-| Client → Server | Binary `float32` PCM | 16 kHz mono audio chunk (0.5–2 s ideal) |
-| Server → Client | JSON text | `{ "emotion": "HAPPY", "source": "AI_MODEL", "raw_text": "<|HAPPY|> hello" }` |
-
-**Emotion values:** `HAPPY`, `SAD`, `ANGRY`, `NEUTRAL`, `EXCITED`
-
-**Source values:** `AI_MODEL`, `ACOUSTIC_DNA`, `ERROR_RECOVERY`
-
----
-
-## Setup Options
+### SER smoke test
 
 ```bash
-python setup.py                  # Full setup (auto-detect platform)
-python setup.py --colab          # Force Colab profile
-python setup.py --skip-deps      # Skip pip installs
-python setup.py --skip-models    # Skip model download
-python setup.py --skip-test-data # Skip RAVDESS download
+python tests/integration/test_ser.py
 ```
+
+Runs emotion2vec on a single RAVDESS clip. Expect:
+
+```
+SER result: {'emotion': 'SAD', 'confidence': 0.72, 'raw_label': 'sad'}
+```
+
+### Benchmark results (reference)
+
+| Mode | Overall | SER loaded |
+|------|---------|------------|
+| `--ai-only` | 27.78% | No |
+| **Default hybrid** | **80.76%** | Yes |
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANABELLE_DATA_DIR` | Colab: `/content/anabelle-data`, local: repo root | Model + test data root |
+| `ANABELLE_HOST` | `0.0.0.0` | Gateway bind address |
+| `ANABELLE_PORT` | `8000` | Gateway port |
+| `ANABELLE_SER_MODEL` | `iic/emotion2vec_plus_large` | emotion2vec model ID |
+| `ANABELLE_MODEL_HUB` | `hf` | Model hub (`hf` or `ms`) |
+| `ANABELLE_SER_HUBS` | `hf,ms` | Hub fallback order |
+| `ANABELLE_SER_MIN_CONF` | `0.20` | Minimum SER softmax confidence |
+
+---
+
+## Colab Workflow
+
+```python
+# First time
+!git clone <repo-url> anabelle-backend
+%cd anabelle-backend
+!python setup.py --colab
+
+# Later sessions
+%cd /content/anabelle-backend
+!git pull
+!python setup.py --colab --skip-models --skip-test-data
+
+!python run.py test
+!python run.py serve   # keep cell running; expose port 8000 via ngrok
+```
+
+Open [`notebooks/Anabelle_Colab.ipynb`](notebooks/Anabelle_Colab.ipynb) for a ready-made notebook.
+
+---
+
+## Dependencies
+
+Always install via `python setup.py` — do not manually `pip install` torch/numpy/funasr.
+
+| Stack | Packages |
+|-------|----------|
+| **AI inference** | funasr 1.4.4, modelscope, transformers, SenseVoiceSmall, emotion2vec+ |
+| **Acoustic** | numpy 1.26.4 (≤ Py 3.12), librosa, numba, scipy |
+| **Gateway** | fastapi, uvicorn, websockets |
+
+See [`requirements/`](requirements/) for pinned versions.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| `ImportError: numpy` ABI error | NumPy 2.x installed | `pip install numpy==1.26.4` (Py ≤ 3.12) or re-run `setup.py` |
-| 404 on model load | Registration failure | Re-run `setup.py`; check `WeTextProcessing` installed |
-| Slow inference | Running on CPU | Enable GPU runtime (Colab) or verify CUDA drivers |
-| `numba` import error | Python too new | Use Python 3.11, or upgrade numba |
-| No `SER_MODEL` predictions | emotion2vec labels are bilingual (`生气/angry`) | Pull latest code; run `python test/test_ser.py` |
-| `SER loaded: False` in report | emotion2vec failed to download | Re-run `python setup.py --colab`; try `ANABELLE_MODEL_HUB=ms` |
-| Re-downloads models on every pull | Assets inside repo dir | Use default `/content/anabelle-data` (automatic on Colab) |
-| Empty model folder | Download interrupted | Re-run `python download_models.py` (resumes partial files) |
+| Symptom | Fix |
+|---------|-----|
+| `ModuleNotFoundError: anabelle` | Run commands from repo root; `pip install -e .` optional |
+| `SER loaded: False` | Re-run `python setup.py`; try `ANABELLE_MODEL_HUB=ms` |
+| No `SER_MODEL` in reports | Pull latest code (bilingual label fix in `ser.py`) |
+| 404 on model load | Re-run setup; check `WeTextProcessing` installed |
+| `tokenizers` build fail (Py 3.13) | Use `python setup.py --colab` (handles wheel pins) |
+| Port already in use | `ANABELLE_PORT=8001 python run.py serve` |
 
 ---
 

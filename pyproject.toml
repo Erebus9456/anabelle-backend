@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anabelle-backend"
+version = "1.0.0"
+description = "Hybrid affective inference backend for the ANABELLE avatar"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
+    "websockets>=17.1",
+    "librosa>=0.11.0",
+    "numpy>=1.26.4",
+    "scipy>=1.11.0",
+    "tqdm>=4.70.0",
+    "sentencepiece>=0.2.2",
+    "soundfile>=0.12.1",
+]
+
+[project.scripts]
+anabelle = "anabelle.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["anabelle*"]

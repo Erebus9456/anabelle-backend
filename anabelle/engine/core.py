@@ -1,17 +1,21 @@
-from colab_compat import apply_runtime_patches
+"""Hybrid affective inference: SenseVoice + emotion2vec + acoustic fallback."""
 
-apply_runtime_patches()
+from __future__ import annotations
 
-from funasr import AutoModel
 import logging
 import re
-import torch
-import numpy as np
-import librosa
 
-from device_utils import get_device_info
-from paths import get_model_dir
-from ser_engine import SerEngine
+import librosa
+import numpy as np
+import torch
+from funasr import AutoModel
+
+from anabelle.engine.ser import SerEngine
+from anabelle.utils.compat import apply_runtime_patches
+from anabelle.utils.device import get_device_info
+from anabelle.utils.paths import get_model_dir
+
+apply_runtime_patches()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AnabelleEngine")
@@ -31,7 +35,6 @@ SENSEVOICE_EMOTION_TAGS = frozenset(
     }
 )
 
-# SenseVoice tags we trust directly (model was explicit, not uncertain)
 CONFIDENT_SENSEVOICE_TAGS = frozenset(
     {"HAPPY", "SAD", "ANGRY", "FEARFUL", "DISGUSTED", "SURPRISED"}
 )
@@ -39,7 +42,7 @@ CONFIDENT_SENSEVOICE_TAGS = frozenset(
 
 class AnabelleEngine:
     def __init__(self, *, enable_ser: bool = True):
-        logger.info(f"Initializing Hybrid Engine from: {model_path}")
+        logger.info("Initializing Hybrid Engine from: %s", model_path)
         device_info = get_device_info()
         self.device = device_info.device
         self.use_fp16 = device_info.use_fp16 and self.device == "cuda"
@@ -206,7 +209,6 @@ class AnabelleEngine:
             raw_text = res[0].get("text", "")
             sv_emotion = self.extract_raw_sensevoice_emotion(raw_text)
 
-            # Tier 1: confident SenseVoice emotion tags
             if sv_emotion in CONFIDENT_SENSEVOICE_TAGS:
                 return self._result(
                     emotion=self.emotion_map[sv_emotion],
@@ -215,7 +217,6 @@ class AnabelleEngine:
                     sensevoice_emotion=sv_emotion,
                 )
 
-            # Tier 2: SenseVoice explicitly said neutral
             if sv_emotion == "NEUTRAL":
                 return self._result(
                     emotion="NEUTRAL",
@@ -224,7 +225,6 @@ class AnabelleEngine:
                     sensevoice_emotion=sv_emotion,
                 )
 
-            # Tier 2b: strong audio events (laughter/cry/etc.)
             event_emotion = self.extract_event_emotion(raw_text)
             if event_emotion:
                 return self._result(
@@ -234,7 +234,6 @@ class AnabelleEngine:
                     sensevoice_emotion=sv_emotion,
                 )
 
-            # Tier 3: EMO_UNKNOWN / missing tag -> emotion2vec SER
             if allow_ser_fallback and self.ser_engine is not None:
                 ser = self.ser_engine.predict(audio, sample_rate=sample_rate)
                 if ser["emotion"]:
@@ -247,7 +246,6 @@ class AnabelleEngine:
                         ser_confidence=ser["confidence"],
                     )
 
-            # Tier 4: prosody heuristics
             if allow_acoustic_fallback:
                 return self._result(
                     emotion=self.get_acoustic_fallback(audio, sample_rate),
@@ -264,7 +262,7 @@ class AnabelleEngine:
             )
 
         except Exception as e:
-            logger.error(f"Engine Error: {e}")
+            logger.error("Engine Error: %s", e)
             fallback = (
                 self.get_acoustic_fallback(audio, sample_rate)
                 if allow_acoustic_fallback
@@ -276,8 +274,3 @@ class AnabelleEngine:
                 raw_text="",
                 sensevoice_emotion=None,
             )
-
-
-if __name__ == "__main__":
-    engine = AnabelleEngine()
-    print("Engine Test Ready.")

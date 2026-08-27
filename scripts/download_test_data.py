@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from paths import ensure_data_dirs, get_ravdess_cache_dir, get_test_audio_dir
+from anabelle.utils.paths import ensure_data_dirs, get_ravdess_cache_dir, get_test_audio_dir
 
 DATASET_URL = "https://zenodo.org/records/1188976/files/Audio_Speech_Actors_01-24.zip?download=1"
 ACTORS = tuple(f"Actor_{index:02d}" for index in range(1, 25))
@@ -31,8 +31,7 @@ def dataset_is_complete(data_dir: Path) -> bool:
         actor_dir = data_dir / actor
         if not actor_dir.is_dir():
             return False
-        wav_count = len(list(actor_dir.glob("*.wav")))
-        if wav_count != EXPECTED_WAV_COUNT:
+        if len(list(actor_dir.glob("*.wav"))) != EXPECTED_WAV_COUNT:
             return False
     return True
 
@@ -67,8 +66,7 @@ def download_test_data() -> Path:
 
     source_root = actor_roots[0].parent
     for actor in ACTORS:
-        actor_source = source_root / actor
-        if not actor_source.is_dir():
+        if not (source_root / actor).is_dir():
             raise RuntimeError(f"Downloaded archive is missing {actor}")
 
     for actor in ACTORS:
