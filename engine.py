@@ -1,3 +1,7 @@
+from colab_compat import apply_runtime_patches
+
+apply_runtime_patches()
+
 from funasr import AutoModel
 import logging
 import re
@@ -6,29 +10,41 @@ import torch
 import numpy as np
 import librosa
 
+from device_utils import get_device_info
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AnabelleEngine")
 
 model_path = os.path.join(os.getcwd(), "models", "SenseVoiceSmall")
 
+
 class AnabelleEngine:
     def __init__(self):
         logger.info(f"Initializing Hybrid Engine from: {model_path}")
-        if torch.cuda.is_available():
-            device = "cuda"
-        elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-            device = "mps"
-        else:
-            device = "cpu"
+        device_info = get_device_info()
+        self.device = device_info.device
+        self.use_fp16 = device_info.use_fp16 and self.device == "cuda"
 
-        logger.info(f"Using inference device: {device}")
-        self.model = AutoModel(
-            model=model_path,
-            device=device,
-            disable_update=True,
-            model_revision="master" 
+        model_kwargs = {
+            "model": model_path,
+            "device": self.device,
+            "disable_update": True,
+            "model_revision": "master",
+        }
+        if self.device == "cuda":
+            model_kwargs["ngpu"] = 1
+
+        logger.info(
+            "Using inference device: %s (%s)%s",
+            self.device,
+            device_info.label,
+            " with FP16" if self.use_fp16 else "",
         )
-        
+        self.model = AutoModel(**model_kwargs)
+
+        if self.device == "cuda":
+            torch.backends.cudnn.benchmark = True
+
         # 1. EMOTION MAPPING (AI Tag -> Avatar State)
         self.emotion_map = {
             "HAPPY": "HAPPY",
@@ -90,6 +106,7 @@ class AnabelleEngine:
                 
         return None
 
+    @torch.inference_mode()
     def analyze_chunk(self, audio_data):
         try:
             res = self.model.generate(

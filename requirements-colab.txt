@@ -1,0 +1,13 @@
+# Colab profile — torch/numpy installed explicitly by setup.py
+funasr==1.4.4
+modelscope>=1.15.0
+transformers<4.45
+sentencepiece==0.2.2
+WeTextProcessing>=1.0.3
+librosa==0.11.0
+numba>=0.59.0
+scipy>=1.11.0
+fastapi==0.141.1
+uvicorn==0.52.4
+websockets==17.1
+tqdm==4.70.0

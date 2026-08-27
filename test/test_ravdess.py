@@ -5,6 +5,9 @@ from tqdm import tqdm
 
 # Import engine from parent
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from colab_compat import apply_runtime_patches
+
+apply_runtime_patches()
 from engine import AnabelleEngine
 
 def run_static_test():

@@ -1,3 +1,7 @@
+from colab_compat import apply_runtime_patches
+
+apply_runtime_patches()
+
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from engine import AnabelleEngine
@@ -31,9 +35,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Run the AI Inference
             # SenseVoice performs best on chunks of 0.5s - 2s
             result = engine.analyze_chunk(audio_array)
-            print(f"Engine Decision: {result['emotion']}") # Add this line
-            await websocket.send_text(json.dumps(result))
-            # Send the emotional metadata back to the React app
+            logger.info("Engine Decision: %s", result["emotion"])
             await websocket.send_text(json.dumps(result))
             
     except WebSocketDisconnect:
