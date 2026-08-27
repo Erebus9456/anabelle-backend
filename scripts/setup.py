@@ -8,6 +8,7 @@ Installs dependencies, downloads model weights, and fetches RAVDESS test data.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import sys
@@ -50,7 +51,7 @@ def pip_base(*extra: str) -> list[str]:
     return [sys.executable, "-m", "pip", "install", "--upgrade", "--prefer-binary", *extra]
 
 
-def install_torch(profile: str) -> None:
+def install_torch(profile: str, use_cuda: bool = False) -> None:
     if profile == "colab":
         run_command(
             pip_base("torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu124"),
@@ -59,6 +60,20 @@ def install_torch(profile: str) -> None:
         return
     if profile == "mac":
         run_command(pip_base("torch==2.2.2", "torchaudio==2.2.2"), label="Installing PyTorch (macOS)")
+        return
+    if platform.system().lower() == "windows":
+        if use_cuda:
+            # Windows with CUDA (user must have NVIDIA GPU + CUDA toolkit)
+            run_command(
+                pip_base("torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu124"),
+                label="Installing PyTorch (Windows CUDA)",
+            )
+        else:
+            # Windows CPU-only (default for safety)
+            run_command(
+                pip_base("torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cpu"),
+                label="Installing PyTorch (Windows CPU)",
+            )
         return
     run_command(
         pip_base("torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu124"),
@@ -183,6 +198,7 @@ def main() -> None:
     parser.add_argument("--skip-models", action="store_true")
     parser.add_argument("--skip-test-data", action="store_true")
     parser.add_argument("--with-onnx", action="store_true", help="Install ONNX Runtime for CPU optimization")
+    parser.add_argument("--cuda", action="store_true", help="Install CUDA version of PyTorch (Windows/Linux only)")
     args = parser.parse_args()
 
     global profile  # Make profile available to ensure_data_dirs_inline
@@ -195,7 +211,7 @@ def main() -> None:
 
     if not args.skip_deps:
         run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], label="Upgrading pip")
-        install_torch(profile)
+        install_torch(profile, use_cuda=args.cuda)
         install_numpy()
         install_base_requirements(profile)
         install_ai_stack(profile)

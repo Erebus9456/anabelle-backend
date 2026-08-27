@@ -38,6 +38,12 @@ export ANABELLE_QUANTIZE=int8
 python run.py serve
 ```
 
+For Windows with NVIDIA GPU (CUDA):
+
+```bash
+python setup.py --cuda          # install CUDA version of PyTorch
+```
+
 Alternative entry points:
 
 ```bash
