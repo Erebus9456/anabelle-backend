@@ -2,6 +2,7 @@ from funasr import AutoModel
 import logging
 import re
 import os
+import torch
 import numpy as np
 import librosa
 
@@ -13,9 +14,17 @@ model_path = os.path.join(os.getcwd(), "models", "SenseVoiceSmall")
 class AnabelleEngine:
     def __init__(self):
         logger.info(f"Initializing Hybrid Engine from: {model_path}")
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            device = "mps"
+        else:
+            device = "cpu"
+
+        logger.info(f"Using inference device: {device}")
         self.model = AutoModel(
             model=model_path,
-            device="cpu",
+            device=device,
             disable_update=True,
             model_revision="master" 
         )
