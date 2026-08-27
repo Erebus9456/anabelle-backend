@@ -117,6 +117,15 @@ def install_optional_text_processing() -> None:
         print("Warning: WeTextProcessing install skipped.")
 
 
+def install_onnx_optimization() -> None:
+    """Optional ONNX Runtime for CPU optimization (INT8 quantization)."""
+    req_file = REQ_DIR / "onnx.txt"
+    result = run_command(pip_base("-r", str(req_file)), label="Installing ONNX Runtime (optional)", check=False)
+    if result.returncode != 0:
+        print("Warning: ONNX Runtime install skipped. PyTorch backend will be used.")
+        print("To enable ONNX later: pip install -r requirements/onnx.txt")
+
+
 def verify_environment() -> None:
     from anabelle.utils.compat import apply_runtime_patches
     apply_runtime_patches()
@@ -151,6 +160,7 @@ def main() -> None:
     parser.add_argument("--skip-deps", action="store_true")
     parser.add_argument("--skip-models", action="store_true")
     parser.add_argument("--skip-test-data", action="store_true")
+    parser.add_argument("--with-onnx", action="store_true", help="Install ONNX Runtime for CPU optimization")
     args = parser.parse_args()
 
     profile = detect_profile(force_colab=args.colab)
@@ -167,6 +177,8 @@ def main() -> None:
         install_ai_stack(profile)
         if profile == "colab":
             install_optional_text_processing()
+        if args.with_onnx:
+            install_onnx_optimization()
 
     if not args.skip_models:
         from scripts.download_models import download_models
@@ -180,6 +192,10 @@ def main() -> None:
     print("\nANABELLE setup complete.")
     print("Start gateway:  python run.py serve")
     print("Run tests:      python run.py test")
+    if args.with_onnx:
+        print("\nONNX Runtime installed. Enable with: export ANABELLE_BACKEND=onnx")
+    else:
+        print("\nFor CPU optimization, install ONNX Runtime: python setup.py --with-onnx")
 
 
 if __name__ == "__main__":

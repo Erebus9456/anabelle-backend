@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
 
 import librosa
 import numpy as np
 import torch
-from funasr import AutoModel
 
+from anabelle.config import InferenceConfig
+from anabelle.engine.backends import create_sensevoice_backend
+from anabelle.engine.semantic import match_semantic_emotion
 from anabelle.engine.ser import SerEngine
+from anabelle.engine.vad import VadGate
 from anabelle.utils.compat import apply_runtime_patches
 from anabelle.utils.device import get_device_info
 from anabelle.utils.paths import get_model_dir
@@ -41,32 +45,33 @@ CONFIDENT_SENSEVOICE_TAGS = frozenset(
 
 
 class AnabelleEngine:
-    def __init__(self, *, enable_ser: bool = True):
+    def __init__(
+        self,
+        *,
+        enable_ser: bool | None = None,
+        config: InferenceConfig | None = None,
+    ):
+        self.config = config or InferenceConfig.from_env()
+        if enable_ser is not None:
+            self.config = replace(self.config, enable_ser=enable_ser)
+
         logger.info("Initializing Hybrid Engine from: %s", model_path)
         device_info = get_device_info()
         self.device = device_info.device
-        self.use_fp16 = device_info.use_fp16 and self.device == "cuda"
-        self.enable_ser = enable_ser
 
-        model_kwargs = {
-            "model": model_path,
-            "device": self.device,
-            "disable_update": True,
-            "model_revision": "master",
-        }
-        if self.device == "cuda":
-            model_kwargs["ngpu"] = 1
+        if self.config.quantize == "fp16" and self.config.backend != "pytorch":
+            logger.warning("FP16 quantize applies to PyTorch backend only; using INT8/FP32 for ONNX")
+        if self.config.quantize == "fp16" and self.device != "cuda":
+            logger.warning("FP16 requested but device is %s; falling back to FP32", self.device)
 
-        logger.info(
-            "Using inference device: %s (%s)%s",
-            self.device,
-            device_info.label,
-            " with FP16" if self.use_fp16 else "",
+        self.sensevoice = create_sensevoice_backend(
+            backend=self.config.backend,
+            quantize=self.config.quantize,
+            model_path=model_path,
+            device=self.device,
         )
-        self.model = AutoModel(**model_kwargs)
-
-        if self.device == "cuda":
-            torch.backends.cudnn.benchmark = True
+        self.vad = VadGate(self.config)
+        self._sensevoice_cache: dict = {}
 
         self.emotion_map = {
             "HAPPY": "HAPPY",
@@ -92,7 +97,7 @@ class AnabelleEngine:
 
         self.ser_engine: SerEngine | None = None
         self.ser_available = False
-        if enable_ser:
+        if self.config.enable_ser:
             try:
                 self.ser_engine = SerEngine(device=self.device)
                 self.ser_available = True
@@ -100,7 +105,10 @@ class AnabelleEngine:
                 logger.warning("SER model unavailable, acoustic fallback only: %s", exc)
 
         logger.info(
-            "ANABELLE Engine loaded successfully (SER=%s).",
+            "ANABELLE Engine loaded (backend=%s, quantize=%s, vad=%s, SER=%s).",
+            self.sensevoice.backend_name,
+            self.sensevoice.quantize_label,
+            self.config.vad_mode,
             "ready" if self.ser_available else "disabled",
         )
 
@@ -172,8 +180,11 @@ class AnabelleEngine:
         sensevoice_emotion: str | None = None,
         ser_label: str | None = None,
         ser_confidence: float | None = None,
+        rms: float | None = None,
+        gated: bool | None = None,
+        gate_reason: str | None = None,
     ) -> dict:
-        return {
+        payload = {
             "emotion": emotion,
             "source": source,
             "raw_text": raw_text,
@@ -181,6 +192,42 @@ class AnabelleEngine:
             "sensevoice_emotion": sensevoice_emotion,
             "ser_label": ser_label,
             "ser_confidence": ser_confidence,
+        }
+        if rms is not None:
+            payload["rms"] = rms
+        if gated is not None:
+            payload["gated"] = gated
+        if gate_reason is not None:
+            payload["gate_reason"] = gate_reason
+        return payload
+
+    def analyze_reflex(self, audio_data, sample_rate: int = 16000) -> dict:
+        """Fast local reflex: VAD gate + acoustic DNA (no heavy models)."""
+        audio = np.asarray(audio_data, dtype=np.float32).flatten()
+        rms = VadGate.rms(audio)
+        should_infer, gate_reason = self.vad.should_infer(audio, sample_rate)
+
+        if not should_infer:
+            return {
+                "emotion": "NEUTRAL",
+                "source": "VAD_GATE",
+                "intensity": rms,
+                "rms": rms,
+                "gated": True,
+                "gate_reason": gate_reason,
+            }
+
+        preprocessed = self.preprocess_audio(audio, sample_rate)
+        emotion = self.get_acoustic_fallback(preprocessed, sample_rate)
+        intensity = min(1.0, rms / 0.08)
+
+        return {
+            "emotion": emotion,
+            "source": "ACOUSTIC_DNA",
+            "intensity": intensity,
+            "rms": rms,
+            "gated": False,
+            "gate_reason": gate_reason,
         }
 
     @torch.inference_mode()
@@ -193,14 +240,29 @@ class AnabelleEngine:
         allow_ser_fallback: bool = True,
         sample_rate: int = 16000,
     ):
-        audio = self.preprocess_audio(audio_data, sample_rate)
+        audio = np.asarray(audio_data, dtype=np.float32).flatten()
+        rms = VadGate.rms(audio)
+        should_infer, gate_reason = self.vad.should_infer(audio, sample_rate)
+
+        if not should_infer:
+            return self._result(
+                emotion="NEUTRAL",
+                source="VAD_GATE",
+                raw_text="",
+                rms=rms,
+                gated=True,
+                gate_reason=gate_reason,
+            )
+
+        audio = self.preprocess_audio(audio, sample_rate)
 
         try:
-            res = self.model.generate(
-                input=audio,
-                cache={},
+            res = self.sensevoice.generate(
+                audio,
                 language=language,
                 use_itn=True,
+                cache=self._sensevoice_cache,
+                sample_rate=sample_rate,
             )
 
             if not res:
@@ -215,6 +277,9 @@ class AnabelleEngine:
                     source="AI_MODEL",
                     raw_text=raw_text,
                     sensevoice_emotion=sv_emotion,
+                    rms=rms,
+                    gated=False,
+                    gate_reason=gate_reason,
                 )
 
             if sv_emotion == "NEUTRAL":
@@ -223,6 +288,9 @@ class AnabelleEngine:
                     source="AI_MODEL",
                     raw_text=raw_text,
                     sensevoice_emotion=sv_emotion,
+                    rms=rms,
+                    gated=False,
+                    gate_reason=gate_reason,
                 )
 
             event_emotion = self.extract_event_emotion(raw_text)
@@ -232,7 +300,53 @@ class AnabelleEngine:
                     source="AI_MODEL",
                     raw_text=raw_text,
                     sensevoice_emotion=sv_emotion,
+                    rms=rms,
+                    gated=False,
+                    gate_reason=gate_reason,
                 )
+
+            if self.config.enable_semantic:
+                semantic = match_semantic_emotion(raw_text)
+                if semantic:
+                    return self._result(
+                        emotion=semantic,
+                        source="SEMANTIC",
+                        raw_text=raw_text,
+                        sensevoice_emotion=sv_emotion,
+                        rms=rms,
+                        gated=False,
+                        gate_reason=gate_reason,
+                    )
+
+            # Smart SER mode: skip SER when not needed for real-time performance
+            if self.config.ser_mode == "smart":
+                # Skip SER if we have any text (likely confident enough for acoustic fallback)
+                # or if RMS is low (quiet speech doesn't need heavy SER)
+                if raw_text.strip() or rms < 0.04:
+                    logger.debug("Smart SER: skipping (has_text=%s, rms=%.3f)", bool(raw_text.strip()), rms)
+                    if allow_acoustic_fallback:
+                        return self._result(
+                            emotion=self.get_acoustic_fallback(audio, sample_rate),
+                            source="ACOUSTIC_DNA",
+                            raw_text=raw_text,
+                            sensevoice_emotion=sv_emotion,
+                            rms=rms,
+                            gated=False,
+                            gate_reason=gate_reason,
+                        )
+
+            if self.config.ser_mode == "off":
+                logger.debug("SER disabled by config")
+                if allow_acoustic_fallback:
+                    return self._result(
+                        emotion=self.get_acoustic_fallback(audio, sample_rate),
+                        source="ACOUSTIC_DNA",
+                        raw_text=raw_text,
+                        sensevoice_emotion=sv_emotion,
+                        rms=rms,
+                        gated=False,
+                        gate_reason=gate_reason,
+                    )
 
             if allow_ser_fallback and self.ser_engine is not None:
                 ser = self.ser_engine.predict(audio, sample_rate=sample_rate)
@@ -244,6 +358,9 @@ class AnabelleEngine:
                         sensevoice_emotion=sv_emotion,
                         ser_label=ser["raw_label"],
                         ser_confidence=ser["confidence"],
+                        rms=rms,
+                        gated=False,
+                        gate_reason=gate_reason,
                     )
 
             if allow_acoustic_fallback:
@@ -252,6 +369,9 @@ class AnabelleEngine:
                     source="ACOUSTIC_DNA",
                     raw_text=raw_text,
                     sensevoice_emotion=sv_emotion,
+                    rms=rms,
+                    gated=False,
+                    gate_reason=gate_reason,
                 )
 
             return self._result(
@@ -259,6 +379,9 @@ class AnabelleEngine:
                 source="AI_MODEL",
                 raw_text=raw_text,
                 sensevoice_emotion=sv_emotion,
+                rms=rms,
+                gated=False,
+                gate_reason=gate_reason,
             )
 
         except Exception as e:
@@ -273,4 +396,7 @@ class AnabelleEngine:
                 source="ERROR_RECOVERY",
                 raw_text="",
                 sensevoice_emotion=None,
+                rms=rms,
+                gated=False,
+                gate_reason=gate_reason,
             )

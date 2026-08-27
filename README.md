@@ -29,6 +29,15 @@ python run.py serve             # start gateway on :8000
 python run.py test              # run RAVDESS benchmark (~80% hybrid accuracy)
 ```
 
+For CPU optimization (ONNX Runtime + INT8 quantization):
+
+```bash
+python setup.py --with-onnx     # install ONNX Runtime for faster CPU inference
+export ANABELLE_BACKEND=onnx
+export ANABELLE_QUANTIZE=int8
+python run.py serve
+```
+
 Alternative entry points:
 
 ```bash
@@ -309,6 +318,95 @@ SER result: {'emotion': 'SAD', 'confidence': 0.72, 'raw_label': 'sad'}
 | `ANABELLE_MODEL_HUB` | `hf` | Model hub (`hf` or `ms`) |
 | `ANABELLE_SER_HUBS` | `hf,ms` | Hub fallback order |
 | `ANABELLE_SER_MIN_CONF` | `0.20` | Minimum SER softmax confidence |
+| `ANABELLE_BACKEND` | `pytorch` | SenseVoice backend: `pytorch` or `onnx` |
+| `ANABELLE_QUANTIZE` | `fp32` | Model precision: `fp32`, `fp16` (CUDA only), or `int8` (ONNX) |
+| `ANABELLE_VAD` | `rms` | Voice activity detection: `rms`, `silero`, or `off` |
+| `ANABELLE_VAD_RMS` | `0.02` | RMS threshold for VAD gate |
+| `ANABELLE_SER_MODE` | `smart` | SER policy: `always`, `smart`, or `off` |
+| `ANABELLE_DUAL_PATH` | `1` | Enable dual-path WebSocket (reflex + deferred emotion) |
+| `ANABELLE_ENABLE_SEMANTIC` | `1` | Enable semantic text-based emotion short-circuit |
+| `ANABELLE_ENABLE_SMOOTHING` | `1` | Enable emotion hysteresis smoothing |
+| `ANABELLE_SMOOTHING_WINDOW` | `3` | Smoothing window size |
+| `ANABELLE_MIN_CHUNK_INTERVAL` | `0.5` | Minimum seconds between audio chunks (rate limiter) |
+
+---
+
+## Performance Optimization for CPU
+
+For real-time performance on CPU/MPS devices, use these low-latency options (with slight accuracy trade-offs):
+
+### Recommended CPU configuration
+
+```bash
+# Smart SER mode (default) - skips heavy SER when text is detected
+export ANABELLE_SER_MODE=smart
+
+# ONNX backend with INT8 quantization (2-4x faster than PyTorch FP32)
+export ANABELLE_BACKEND=onnx
+export ANABELLE_QUANTIZE=int8
+
+# RMS VAD gate (skips inference on silence)
+export ANABELLE_VAD=rms
+export ANABELLE_VAD_RMS=0.02
+
+# Dual-path enabled (default) - instant reflex response
+export ANABELLE_DUAL_PATH=1
+```
+
+Or via CLI:
+
+```bash
+python -m anabelle.cli serve --backend onnx --quantize int8 --ser-mode smart --vad rms
+```
+
+### Performance modes
+
+| Mode | Latency | Accuracy | Use case |
+|------|---------|----------|----------|
+| **Default (smart)** | ~0.4-0.5s/chunk | ~75-80% | Real-time avatar with good accuracy |
+| **CPU-optimized** | ~0.3-0.4s/chunk | ~70-75% | CPU-only, maximum responsiveness |
+| **Maximum speed** | ~0.2-0.3s/chunk | ~60-65% | Latency-critical, accept lower accuracy |
+| **GPU default** | ~0.1-0.2s/chunk | ~80-81% | Best quality with GPU |
+
+### CPU-optimized configuration
+
+```bash
+# Maximum CPU performance (lower accuracy)
+export ANABELLE_SER_MODE=off           # Disable SER entirely
+export ANABELLE_BACKEND=onnx           # Use ONNX runtime
+export ANABELLE_QUANTIZE=int8          # INT8 quantization
+export ANABELLE_VAD=rms                # RMS gate
+export ANABELLE_VAD_RMS=0.03           # Higher threshold (more aggressive gating)
+export ANABELLE_DUAL_PATH=1            # Keep dual-path for responsiveness
+```
+
+### Trade-offs explained
+
+- **`ANABELLE_SER_MODE=smart`**: Skips SER (RTF ~5.3) when SenseVoice returns text or RMS is low. Cuts ~1s per chunk with minimal accuracy loss.
+- **`ANABELLE_SER_MODE=off`**: Disables SER entirely. Uses acoustic fallback only. Fastest but ~10-15% accuracy drop.
+- **`ANABELLE_BACKEND=onnx` + `ANABELLE_QUANTIZE=int8`**: ONNX Runtime with INT8 quantization is 2-4x faster than PyTorch FP32 on CPU. **Note**: First startup exports PyTorch model to ONNX (can take 5-10 minutes on CPU/MPS). For immediate use, stick with PyTorch backend + smart SER mode.
+- **`ANABELLE_VAD=rms`**: Skips all inference when audio RMS is below threshold. Near 0% CPU during pauses.
+- **`ANABELLE_DUAL_PATH=1`**: Sends instant "reflex" response (acoustic DNA) while AI processes. Avatar feels responsive even with slower inference.
+- **`ANABELLE_MIN_CHUNK_INTERVAL`**: Server-side rate limiter that drops chunks arriving faster than the specified interval. Prevents CPU overload from overly aggressive frontend sampling.
+
+### Recommended immediate setup (no ONNX export delay)
+
+```bash
+# Use PyTorch backend with smart SER mode - no export delay, still fast
+export ANABELLE_BACKEND=pytorch
+export ANABELLE_QUANTIZE=fp32
+export ANABELLE_SER_MODE=smart
+export ANABELLE_VAD=rms
+export ANABELLE_DUAL_PATH=1
+export ANABELLE_MIN_CHUNK_INTERVAL=0.5  # Rate limit: minimum 0.5s between chunks
+python run.py serve
+```
+
+Or via CLI:
+
+```bash
+python -m anabelle.cli serve --backend pytorch --ser-mode smart --min-chunk-interval 0.5
+```
 
 ---
 
@@ -342,6 +440,7 @@ Always install via `python setup.py` — do not manually `pip install` torch/num
 | **AI inference** | funasr 1.4.4, modelscope, transformers, SenseVoiceSmall, emotion2vec+ |
 | **Acoustic** | numpy 1.26.4 (≤ Py 3.12), librosa, numba, scipy |
 | **Gateway** | fastapi, uvicorn, websockets |
+| **CPU optimization (optional)** | funasr-onnx, onnxruntime (install with `--with-onnx`) |
 
 See [`requirements/`](requirements/) for pinned versions.
 
@@ -352,6 +451,7 @@ See [`requirements/`](requirements/) for pinned versions.
 | Symptom | Fix |
 |---------|-----|
 | `ModuleNotFoundError: anabelle` | Run commands from repo root; `pip install -e .` optional |
+| `ModuleNotFoundError: funasr_onnx` | Install ONNX Runtime: `python setup.py --with-onnx` or `pip install -r requirements/onnx.txt` |
 | `SER loaded: False` | Re-run `python setup.py`; try `ANABELLE_MODEL_HUB=ms` |
 | No `SER_MODEL` in reports | Pull latest code (bilingual label fix in `ser.py`) |
 | 404 on model load | Re-run setup; check `WeTextProcessing` installed |
