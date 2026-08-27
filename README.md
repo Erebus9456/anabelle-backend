@@ -23,7 +23,7 @@ Hybrid affective inference service for the ANABELLE avatar. Receives live audio 
 ## Quick Start
 
 ```bash
-git clone <repo-url> anabelle-backend && cd anabelle-backend
+git clone https://github.com/Erebus9456/anabelle-backend && cd anabelle-backend
 python setup.py                 # install deps + download models + RAVDESS data
 python run.py serve             # start gateway on :8000
 python run.py test              # run RAVDESS benchmark (~80% hybrid accuracy)
@@ -316,7 +316,7 @@ SER result: {'emotion': 'SAD', 'confidence': 0.72, 'raw_label': 'sad'}
 
 ```python
 # First time
-!git clone <repo-url> anabelle-backend
+!git clone https://github.com/Erebus9456/anabelle-backend
 %cd anabelle-backend
 !python setup.py --colab
 
