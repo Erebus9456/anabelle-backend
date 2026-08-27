@@ -70,6 +70,9 @@ def install_numpy() -> None:
     if is_python_313_or_newer():
         run_command(pip_base("numpy>=2.0.0"), label="Installing NumPy 2.x (Python 3.13+)")
         return
+    if platform.system().lower() == "windows":
+        run_command(pip_base("numpy>=2.0.0"), label="Installing NumPy 2.x (Windows - float128 fix)")
+        return
     run_command(pip_base("numpy==1.26.4"), label="Installing NumPy 1.26.4")
 
 
@@ -154,6 +157,25 @@ def verify_environment() -> None:
         print(f"SER model check skipped: {exc}")
 
 
+def ensure_data_dirs_inline() -> Path:
+    """Inline version of ensure_data_dirs to avoid import before deps are installed."""
+    # Determine data directory
+    explicit = os.environ.get("ANABELLE_DATA_DIR")
+    if explicit:
+        data_dir = Path(explicit).expanduser().resolve()
+    elif profile == "colab":
+        data_dir = Path("/content/anabelle-data")
+    else:
+        data_dir = PROJECT_ROOT
+
+    # Create directories
+    (data_dir / "models" / "SenseVoiceSmall").mkdir(parents=True, exist_ok=True)
+    (data_dir / "test" / "audio").mkdir(parents=True, exist_ok=True)
+    (data_dir / "test" / ".ravdess-download").mkdir(parents=True, exist_ok=True)
+    (data_dir / "test" / "reports").mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="ANABELLE one-click setup")
     parser.add_argument("--colab", action="store_true")
@@ -163,11 +185,13 @@ def main() -> None:
     parser.add_argument("--with-onnx", action="store_true", help="Install ONNX Runtime for CPU optimization")
     args = parser.parse_args()
 
+    global profile  # Make profile available to ensure_data_dirs_inline
     profile = detect_profile(force_colab=args.colab)
     print(f"Setup profile: {profile}")
 
-    from anabelle.utils.paths import ensure_data_dirs
-    print(f"Persistent data directory: {ensure_data_dirs()}")
+    # Create data directories before installing deps (no imports needed)
+    data_dir = ensure_data_dirs_inline()
+    print(f"Persistent data directory: {data_dir}")
 
     if not args.skip_deps:
         run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], label="Upgrading pip")

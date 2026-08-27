@@ -452,6 +452,7 @@ See [`requirements/`](requirements/) for pinned versions.
 |---------|-----|
 | `ModuleNotFoundError: anabelle` | Run commands from repo root; `pip install -e .` optional |
 | `ModuleNotFoundError: funasr_onnx` | Install ONNX Runtime: `python setup.py --with-onnx` or `pip install -r requirements/onnx.txt` |
+| `OverflowError: cannot convert longdouble infinity to integer` (Windows) | NumPy 1.26.4 has a float128 bug on Windows. Re-run `python setup.py` to install NumPy 2.x, or manually: `pip install numpy>=2.0.0` |
 | `SER loaded: False` | Re-run `python setup.py`; try `ANABELLE_MODEL_HUB=ms` |
 | No `SER_MODEL` in reports | Pull latest code (bilingual label fix in `ser.py`) |
 | 404 on model load | Re-run setup; check `WeTextProcessing` installed |

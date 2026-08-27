@@ -3,9 +3,10 @@ sentencepiece==0.2.2
 # WeTextProcessing>=1.0.3
 
 # Stack 2: Acoustic DNA Layer
-# numpy is installed by setup.py (1.26.4 on Python <=3.12)
+# numpy is installed by setup.py (1.26.4 on Python <=3.12, 2.x on Windows or Python 3.13+)
 librosa==0.10.2.post1
-numpy==1.26.4
+numpy==1.26.4; platform_system!='Windows' and python_version<'3.13'
+numpy>=2.0.0; platform_system=='Windows' or python_version>='3.13'
 numba>=0.60.0; python_version>='3.12'
 numba>=0.60.0; python_version<'3.12'
 scipy>=1.11.0
