@@ -275,7 +275,8 @@ python setup.py --skip-test-data # Skip RAVDESS download
 | 404 on model load | Registration failure | Re-run `setup.py`; check `WeTextProcessing` installed |
 | Slow inference | Running on CPU | Enable GPU runtime (Colab) or verify CUDA drivers |
 | `numba` import error | Python too new | Use Python 3.11, or upgrade numba |
-| Failed building wheel for `tokenizers` | Python 3.13, old pip resolve order | Pull latest code and re-run `python setup.py --colab` |
+| No `SER_MODEL` predictions | emotion2vec labels are bilingual (`生气/angry`) | Pull latest code; run `python test/test_ser.py` |
+| `SER loaded: False` in report | emotion2vec failed to download | Re-run `python setup.py --colab`; try `ANABELLE_MODEL_HUB=ms` |
 | Re-downloads models on every pull | Assets inside repo dir | Use default `/content/anabelle-data` (automatic on Colab) |
 | Empty model folder | Download interrupted | Re-run `python download_models.py` (resumes partial files) |
 

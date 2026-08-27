@@ -77,7 +77,8 @@ def run_static_test(
     print(f"Audio directory: {base_path}")
     print(f"Language hint:   {language}")
     print(f"AI-only mode:    {ai_only}")
-    print(f"SER enabled:     {not no_ser and not ai_only}")
+    print(f"SER requested:   {not no_ser and not ai_only}")
+    print(f"SER loaded:      {engine.ser_available}")
 
     if not base_path.is_dir():
         raise FileNotFoundError(
@@ -168,7 +169,8 @@ def run_static_test(
     report.append(f"Overall Accuracy:   {accuracy:.2f}%")
     report.append(f"Language hint:      {language}")
     report.append(f"AI-only mode:       {ai_only}")
-    report.append(f"SER enabled:        {not no_ser and not ai_only}")
+    report.append(f"SER requested:      {not no_ser and not ai_only}")
+    report.append(f"SER loaded:         {engine.ser_available}")
     report.append("-" * 60)
     report.append("ENGINE LOGIC DISTRIBUTION")
     for src in ("AI_MODEL", "SER_MODEL", "ACOUSTIC_DNA", "ERROR_RECOVERY"):

@@ -88,13 +88,18 @@ class AnabelleEngine:
         }
 
         self.ser_engine: SerEngine | None = None
+        self.ser_available = False
         if enable_ser:
             try:
                 self.ser_engine = SerEngine(device=self.device)
+                self.ser_available = True
             except Exception as exc:
                 logger.warning("SER model unavailable, acoustic fallback only: %s", exc)
 
-        logger.info("ANABELLE Engine loaded successfully.")
+        logger.info(
+            "ANABELLE Engine loaded successfully (SER=%s).",
+            "ready" if self.ser_available else "disabled",
+        )
 
     @staticmethod
     def preprocess_audio(audio_data: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
