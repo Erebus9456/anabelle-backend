@@ -34,17 +34,19 @@ WebSocket endpoint: `ws://localhost:8000/ws/anabelle`
 
 ```bash
 python run.py test
-python run.py test --diagnose --ai-only   # measure pure SenseVoice tag accuracy
-python run.py test --sample-limit 48      # quick smoke test
+python run.py test --diagnose
+python run.py test --ai-only          # SenseVoice tags only (~28% on RAVDESS)
+python run.py test --sample-limit 96  # quick smoke test
 ```
 
 Report written to `<data-dir>/test/anabelle_static_test_report.txt`.
 
-**Interpreting results:** RAVDESS uses acted studio speech. SenseVoice was trained on real-world multilingual audio, so raw tag accuracy on RAVDESS is often **45–65%** even when the pipeline is correct. The report now separates:
+**Why RAVDESS scores look low:** SenseVoice tags **62%+ of RAVDESS clips as `EMO_UNKNOWN`** because it was trained on real-world speech, not acted studio datasets. The pipeline now routes those cases to **emotion2vec+** (`iic/emotion2vec_plus_large`), a dedicated SER model. Expect significantly higher accuracy after pulling this update.
 
-- **Hybrid accuracy** — current production pipeline (AI tags + acoustic fallback)
-- **AI_MODEL only** — files where SenseVoice emitted a parseable emotion tag
-- **Raw tag distribution** — shows if the model is tagging `EMO_UNKNOWN` or `NEUTRAL` too often
+**Interpreting the report:**
+- **AI_MODEL** — SenseVoice was confident
+- **SER_MODEL** — emotion2vec+ handled an `EMO_UNKNOWN` case
+- **ACOUSTIC_DNA** — last-resort prosody guess
 
 ---
 
@@ -128,15 +130,21 @@ Browser (React) ──WebSocket──► main.py (FastAPI)
                                    │
                                    ▼
                               engine.py
-                         ┌────────┴────────┐
-                         │                 │
-                   SenseVoiceSmall    Acoustic DNA
-                   (GPU if avail.)    (RMS + ZCR fallback)
-                         │                 │
-                         └────────┬────────┘
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+              SenseVoiceSmall   emotion2vec+   Acoustic DNA
+              (transcript +     (SER fallback   (prosody heuristics,
+               confident tags)  for EMO_UNKNOWN) last resort)
+                    │              │              │
+                    └──────────────┴──────────────┘
                                    ▼
                           { emotion, source, raw_text }
 ```
+
+**Decision tiers:**
+1. **AI_MODEL** — SenseVoice returns a confident tag (HAPPY, SAD, ANGRY, etc.) or NEUTRAL
+2. **SER_MODEL** — SenseVoice returns `EMO_UNKNOWN`; **emotion2vec+** classifies the utterance
+3. **ACOUSTIC_DNA** — SER confidence too low; prosody heuristics used
 
 **Inference device priority:** CUDA → Apple MPS → CPU
 

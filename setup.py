@@ -207,6 +207,16 @@ def verify_environment() -> None:
     print(f"Model at: {get_model_dir()}")
     print("FunASR registration: OK")
 
+    try:
+        from ser_engine import SerEngine
+        from device_utils import get_device_info
+
+        device = get_device_info().device
+        SerEngine(device=device)
+        print("SER model (emotion2vec+): OK")
+    except Exception as exc:
+        print(f"SER model check skipped: {exc}")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ANABELLE one-click setup")

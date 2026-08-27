@@ -35,6 +35,7 @@ def main() -> None:
     test_parser.add_argument("--sample-limit", type=int, default=0)
     test_parser.add_argument("--language", default="en")
     test_parser.add_argument("--ai-only", action="store_true")
+    test_parser.add_argument("--no-ser", action="store_true")
 
     args = parser.parse_args()
     if args.command == "serve":
@@ -49,6 +50,8 @@ def main() -> None:
             extra.extend(["--language", args.language])
         if args.ai_only:
             extra.append("--ai-only")
+        if args.no_ser:
+            extra.append("--no-ser")
         test(extra)
 
 

@@ -61,20 +61,23 @@ def run_static_test(
     sample_limit: int = 0,
     language: str = "en",
     ai_only: bool = False,
+    no_ser: bool = False,
 ):
-    engine = AnabelleEngine()
+    engine = AnabelleEngine(enable_ser=not no_ser and not ai_only)
     base_path = get_test_audio_dir()
     report_path = get_data_dir() / "test" / "anabelle_static_test_report.txt"
 
     results = []
     source_stats = Counter()
     raw_emotion_tags = Counter()
+    ser_label_stats = Counter()
     missing_tag_samples = []
 
     print("\n--- Starting Static Accuracy Test ---")
     print(f"Audio directory: {base_path}")
     print(f"Language hint:   {language}")
     print(f"AI-only mode:    {ai_only}")
+    print(f"SER enabled:     {not no_ser and not ai_only}")
 
     if not base_path.is_dir():
         raise FileNotFoundError(
@@ -105,6 +108,7 @@ def run_static_test(
             audio,
             language=language,
             allow_acoustic_fallback=not ai_only,
+            allow_ser_fallback=not no_ser and not ai_only,
         )
 
         predicted_emotion = prediction["emotion"]
@@ -112,7 +116,9 @@ def run_static_test(
         source_stats[source] += 1
 
         tags = prediction.get("tags") or []
-        sensevoice_emotion = next((t for t in tags if t in SENSEVOICE_EMOTION_TAGS), None)
+        sensevoice_emotion = prediction.get("sensevoice_emotion") or next(
+            (t for t in tags if t in SENSEVOICE_EMOTION_TAGS), None
+        )
         if sensevoice_emotion:
             raw_emotion_tags[sensevoice_emotion] += 1
         elif len(missing_tag_samples) < 12:
@@ -125,6 +131,10 @@ def run_static_test(
                 }
             )
 
+        ser_label = prediction.get("ser_label")
+        if ser_label:
+            ser_label_stats[ser_label] += 1
+
         results.append(
             {
                 "actor": actor_dir,
@@ -136,6 +146,7 @@ def run_static_test(
                 "correct": expected_emotion == predicted_emotion,
                 "source": source,
                 "sensevoice_emotion": sensevoice_emotion or "NONE",
+                "ser_label": ser_label or "-",
                 "raw_text": prediction.get("raw_text", ""),
             }
         )
@@ -144,6 +155,7 @@ def run_static_test(
     correct = sum(1 for r in results if r["correct"])
     accuracy = (correct / total) * 100 if total else 0.0
     ai_results = [r for r in results if r["source"] == "AI_MODEL"]
+    ser_results = [r for r in results if r["source"] == "SER_MODEL"]
     acoustic_results = [r for r in results if r["source"] == "ACOUSTIC_DNA"]
 
     report = []
@@ -156,9 +168,10 @@ def run_static_test(
     report.append(f"Overall Accuracy:   {accuracy:.2f}%")
     report.append(f"Language hint:      {language}")
     report.append(f"AI-only mode:       {ai_only}")
+    report.append(f"SER enabled:        {not no_ser and not ai_only}")
     report.append("-" * 60)
     report.append("ENGINE LOGIC DISTRIBUTION")
-    for src in ("AI_MODEL", "ACOUSTIC_DNA", "ERROR_RECOVERY"):
+    for src in ("AI_MODEL", "SER_MODEL", "ACOUSTIC_DNA", "ERROR_RECOVERY"):
         count = source_stats.get(src, 0)
         pct = (count / total) * 100 if total else 0.0
         report.append(f"{src:18}: {count} files ({pct:.1f}%)")
@@ -171,15 +184,23 @@ def run_static_test(
     else:
         report.append("No SenseVoice emotion tags detected.")
     report.append("-" * 60)
+    report.append("EMOTION2VEC LABEL DISTRIBUTION (SER_MODEL cases)")
+    if ser_label_stats:
+        for label, count in ser_label_stats.most_common():
+            report.append(f"{label:14}: {count:4}")
+    else:
+        report.append("No SER_MODEL predictions.")
+    report.append("-" * 60)
     report.extend(summarize_accuracy(results, "HYBRID ACCURACY (current pipeline)"))
     if ai_results:
         report.append("")
-        report.extend(summarize_accuracy(ai_results, "AI_MODEL ONLY (where tag was parsed)"))
+        report.extend(summarize_accuracy(ai_results, "AI_MODEL ONLY"))
+    if ser_results:
+        report.append("")
+        report.extend(summarize_accuracy(ser_results, "SER_MODEL ONLY"))
     if acoustic_results:
         report.append("")
-        report.extend(
-            summarize_accuracy(acoustic_results, "ACOUSTIC_DNA ONLY (fallback cases)")
-        )
+        report.extend(summarize_accuracy(acoustic_results, "ACOUSTIC_DNA ONLY"))
     report.append("-" * 60)
     report.append("ACCURACY BY RAVDESS EMOTION CODE")
     for code in sorted(RAVDESS_CODE_TO_LABEL):
@@ -218,7 +239,8 @@ def run_static_test(
         status = "PASS" if row["correct"] else "FAIL"
         report.append(
             f"[{status}] [{row['source']:12}] {row['actor']}/{row['file']} | "
-            f"Exp: {row['expected']} | Pred: {row['predicted']} | SV: {row['sensevoice_emotion']}"
+            f"Exp: {row['expected']} | Pred: {row['predicted']} | "
+            f"SV: {row['sensevoice_emotion']} | SER: {row['ser_label']}"
         )
 
     final_output = "\n".join(report)
@@ -242,7 +264,12 @@ def main():
     parser.add_argument(
         "--ai-only",
         action="store_true",
-        help="Disable acoustic fallback to measure pure SenseVoice tag accuracy",
+        help="SenseVoice tags only (disable SER and acoustic fallback)",
+    )
+    parser.add_argument(
+        "--no-ser",
+        action="store_true",
+        help="Disable emotion2vec SER fallback",
     )
     args = parser.parse_args()
     run_static_test(
@@ -250,6 +277,7 @@ def main():
         sample_limit=args.sample_limit,
         language=args.language,
         ai_only=args.ai_only,
+        no_ser=args.no_ser,
     )
 
 
